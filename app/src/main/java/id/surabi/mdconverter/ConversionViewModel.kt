@@ -137,10 +137,12 @@ internal class ConversionViewModel : ViewModel() {
                     else -> "Batch selesai: $successCount dari ${uris.size} file berhasil dikonversi. Hasil tetap tersedia; pilih folder keluaran atau ekspor tiap file."
                 }
             } catch (error: CancellationException) {
-                message = "Proses dibatalkan. $completed dari $total file selesai; hasil yang sudah selesai tetap dipertahankan."
+                selectedUris.addAll(uris.drop(completed))
+                message = "Proses dibatalkan. $completed dari $total file selesai; hasil tersimpan dipertahankan dan file yang belum diproses dikembalikan ke antrean."
                 throw error
             } catch (error: Exception) {
-                message = "Proses terhenti: " + (error.message ?: "kesalahan tidak diketahui")
+                selectedUris.addAll(uris.drop(completed))
+                message = "Proses terhenti: " + (error.message ?: "kesalahan tidak diketahui") + " File yang belum diproses dikembalikan ke antrean."
             } finally {
                 busy = false
                 conversionJob = null
