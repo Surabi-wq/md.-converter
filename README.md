@@ -1,15 +1,16 @@
 # Marka — File to Markdown
 
-Marka 1.6.0 adalah aplikasi Android native untuk mengubah dokumen, teks, source code, gambar, audio, dan video menjadi dokumen Markdown (`.md`) secara lokal di perangkat. Beberapa file dari berbagai format dapat diproses dalam satu antrean, ditinjau per file, lalu digabungkan secara opsional menjadi satu dokumen dengan daftar isi.
+Marka 1.7.0 adalah aplikasi Android native untuk mengubah dokumen, teks, source code, gambar, audio, dan video menjadi dokumen Markdown (`.md`) secara lokal di perangkat. Beberapa file dari berbagai format dapat diproses dalam satu antrean, ditinjau per file, lalu digabungkan secara opsional menjadi satu dokumen dengan daftar isi.
 
 ## Alur penggunaan
 
 1. Tekan **Pilih file**, kemudian pilih satu atau beberapa file.
-2. Periksa antrean file dan hapus file yang tidak ingin dikonversi.
-3. Tekan **Konfirmasi & mulai konversi**. File diproses berurutan untuk mengendalikan penggunaan memori.
-4. Periksa hasil setiap file. Tombol **Lihat Markdown** menampilkan isi hasil; tombol ekspor menyimpan file tersebut.
-5. Untuk satu dokumen gabungan, tekan **3. Gabungkan & simpan satu file .md**. Semua hasil yang berhasil akan disatukan dengan daftar isi dan bagian terpisah per sumber. Penggabungan bersifat opsional.
-6. Folder keluaran dapat dipilih satu kali. Izin folder disimpan dan digunakan kembali. Tanpa folder keluaran, Android akan meminta lokasi saat hasil diekspor.
+2. Alternatifnya, gunakan **Bagikan/Share** dari aplikasi lain dan pilih Marka untuk mengirim satu atau beberapa file langsung ke antrean.
+3. Periksa antrean file dan hapus file yang tidak ingin dikonversi.
+4. Tekan **Konfirmasi & mulai konversi**. File diproses berurutan untuk mengendalikan penggunaan memori.
+5. Periksa hasil setiap file. Tombol **Lihat Markdown** menampilkan isi hasil; tombol ekspor menyimpan file tersebut.
+6. Untuk satu dokumen gabungan, tekan **3. Gabungkan & simpan satu file .md**. Semua hasil yang berhasil akan disatukan dengan daftar isi dan bagian terpisah per sumber. Penggabungan bersifat opsional.
+7. Riwayat hasil disimpan di penyimpanan internal aplikasi agar tetap tersedia setelah aplikasi ditutup. Folder keluaran juga dapat dipilih untuk mengekspor salinan ke lokasi lain.
 
 Tombol ikon **?** di bagian atas aplikasi membuka panduan penggunaan dan daftar format yang diambil langsung dari registri format aplikasi. Dengan demikian, daftar format pada panduan mengikuti registri yang digunakan konverter.
 
@@ -63,19 +64,22 @@ Deteksi format menggunakan kombinasi signature file, MIME dari Android, dan ekst
 
 - Gambar didekode langsung dari stream dan menggunakan downsampling sebelum OCR; resolusi gambar asli dan ukuran file tetap dicatat jika metadata ukuran tersedia.
 - OCR gambar memakai ML Kit Text Recognition on-device dengan batas sisi hasil decode sekitar 2048 piksel untuk mengendalikan RAM.
-- PDF dengan lapisan teks diproses terlebih dahulu. Jika lapisan teks kosong, halaman dirender satu per satu dan diproses dengan OCR lokal hingga maksimal 50 halaman.
-- PDF scan yang lebih panjang akan diberi peringatan bahwa halaman di atas batas OCR tidak diproses. PDF kompleks atau berukuran besar masih dibatasi memori yang diperlukan PDFBox.
+- PDF diproses per halaman: halaman yang memiliki lapisan teks diekstrak langsung, sedangkan halaman kosong atau hanya memiliki potongan teks pendek dapat menjalani OCR.
+- OCR PDF lokal dibatasi hingga maksimal 50 halaman yang memerlukan OCR; jumlah halaman PDF yang diproses dibatasi hingga 1.000. Peringatan ditampilkan jika ada halaman yang tidak diperiksa.
+- Render OCR PDF menurunkan skala berdasarkan ukuran halaman dan membatasi sisi bitmap hingga sekitar 2.048 piksel untuk mengendalikan RAM.
 - Video dibaca melalui URI tanpa menyalin seluruh file ke RAM. OCR memakai hingga tiga cuplikan skala kecil pada titik waktu yang tersebar dan menggunakan satu recognizer untuk seluruh cuplikan. Pada Android API 26, OCR frame dilewati agar tidak memuat frame penuh ke RAM.
 - Audio dibaca melalui decoder Android untuk mengekstrak metadata seperti durasi, judul, artis, album, genre, bitrate, dan jumlah track jika tersedia.
 - Signature AAC ADTS, frame MPEG audio, dan Opus pada Ogg dibedakan lebih baik. Dukungan codec tetap bergantung pada decoder Android perangkat.
 - Transkripsi ucapan/lirik audio belum tersedia. OCR video membaca teks yang terlihat pada cuplikan, bukan dialog atau subtitle lengkap.
 
-## Perbaikan stabilitas dan penggunaan memori pada 1.6.0
+## Perbaikan stabilitas dan penggunaan memori pada 1.7.0
 
-- Isi Markdown tiap hasil disimpan sebagai cache sementara. Daftar hasil menyimpan metadata dan lokasi cache agar seluruh dokumen tidak terus berada di RAM.
-- Memulai batch baru tidak menghapus hasil terdahulu. Hasil dapat dibersihkan dengan tombol **Hapus hasil**.
+- Isi Markdown tiap hasil disimpan sebagai berkas riwayat di penyimpanan internal aplikasi. Daftar hasil hanya menyimpan metadata dan lokasi berkas, sehingga isi tidak terus berada di RAM.
+- Riwayat dipulihkan saat aplikasi dibuka kembali dan dibatasi hingga 50 hasil atau sekitar 100 MB. Hasil terlama dibersihkan saat batas tercapai; pengguna dapat menghapus seluruh riwayat melalui tombol **Hapus hasil**.
 - Antrean dan status batch dikelola oleh `ViewModel`, sehingga pergantian orientasi layar tidak menghilangkan hasil yang sudah selesai.
-- Status proses menampilkan jumlah file yang telah selesai dan menyediakan tombol pembatalan. Pembatalan dilakukan pada batas aman antarfile; operasi parser yang sedang berjalan tidak selalu dapat dihentikan seketika.
+- Pembatalan dilakukan dengan aman pada batas antarfile: file yang sedang aktif dituntaskan terlebih dahulu, sedangkan file yang belum diproses dikembalikan ke antrean.
+- Penggabungan Markdown hanya dihitung ketika diminta, bukan setiap kali daftar hasil berubah.
+- Nama file antrean dibaca di thread latar, dan izin baca SAF disimpan saat penyedia dokumen mengizinkan.
 - Penggabungan Markdown hanya dihitung ketika diminta, bukan setiap kali daftar hasil berubah.
 - Pemindaian ZIP membatasi jumlah entri, ukuran entri, dan total data dekompresi termasuk entri yang dilewati.
 - CSV mencoba mendeteksi pemisah koma, titik koma, tab, dan pipe. JSON/JSONL kini menerima nilai primitif seperti string, angka, boolean, dan null.
@@ -83,7 +87,7 @@ Deteksi format menggunakan kombinasi signature file, MIME dari Android, dan ekst
 
 ## Batasan yang diketahui
 
-- PDF berbasis teks diproses seperti biasa. PDF scan yang hanya berisi gambar kini menjalani OCR lokal hingga maksimal 50 halaman; halaman lebih lanjut tidak diproses dan akan diberi peringatan.
+- PDF diproses per halaman. Halaman hasil scan atau halaman campuran yang lapisan teksnya kosong/pendek dapat menjalani OCR lokal maksimal 50 halaman yang memerlukan OCR. PDF di atas 1.000 halaman tidak diproses seluruhnya.
 - DOC, XLS, dan PPT biner versi lama belum didukung.
 - XLSX menampilkan nilai sel yang tersimpan; rumus tidak dihitung ulang. Format sel, grafik, dan tata letak spreadsheet tidak dipertahankan.
 - PPTX mengekstrak teks per slide; gambar, animasi, catatan pembicara, dan layout tidak dipertahankan.
@@ -93,12 +97,12 @@ Deteksi format menggunakan kombinasi signature file, MIME dari Android, dan ekst
 - OCR bahasa/aksara tertentu, tulisan tangan, gambar buram, atau teks yang sangat kecil dapat keliru atau tidak terdeteksi.
 - Audio dan video yang codec-nya tidak didukung decoder perangkat hanya menghasilkan laporan dasar dengan peringatan.
 - Batas ukuran file dokumen/arsip yang dibaca ke buffer adalah 64 MB. Pembaca arsip membatasi konten teks terpilih hingga 40 MB, entri terpilih hingga 12 MB, entri lain hingga 32 MB, dan total hasil dekompresi arsip hingga 80 MB. DOCX dan pendeteksian jenis arsip memiliki batas dekompresi tersendiri. Gambar diproses dengan stream; audio/video menggunakan URI/metadata tanpa menyalin seluruh media ke RAM.
-- Hasil konversi disimpan di direktori cache aplikasi. Android dapat menghapus cache ketika ruang penyimpanan rendah; ekspor otomatis ke folder keluaran merupakan pilihan paling aman untuk hasil penting.
+- Riwayat Markdown disimpan di direktori internal aplikasi, bukan cache sistem, dengan batas 50 hasil atau sekitar 100 MB. Riwayat dapat dipulihkan setelah aplikasi ditutup; riwayat dihapus ketika aplikasi di-uninstall atau pengguna menekan Hapus hasil.
 - Selalu tinjau hasil Markdown sebelum digunakan lebih lanjut. Konversi tidak menjamin format identik dengan tampilan dokumen asli.
 
 ## Privasi dan penyimpanan
 
-Pemrosesan dilakukan secara lokal. File asli tidak diubah dan tidak diunggah ke server. Folder keluaran disimpan sebagai URI Storage Access Framework dengan izin yang diberikan Android; jika izin dicabut, pengguna perlu memilih folder kembali.
+Pemrosesan dan riwayat dilakukan secara lokal. File asli tidak diubah dan tidak diunggah ke server. Folder keluaran disimpan sebagai URI Storage Access Framework dengan izin yang diberikan Android; jika izin dicabut, pengguna perlu memilih folder kembali. Riwayat internal dihapus melalui tombol Hapus hasil atau saat aplikasi di-uninstall.
 
 ## Build
 
