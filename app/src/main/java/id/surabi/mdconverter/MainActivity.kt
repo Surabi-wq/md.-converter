@@ -58,6 +58,9 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Screen() {
         val conversionViewModel: ConversionViewModel = viewModel()
+        LaunchedEffect(conversionViewModel) {
+            conversionViewModel.cleanupOrphanedCacheFiles(cacheDir)
+        }
         val files = conversionViewModel.files
         val busy = conversionViewModel.busy
         var message by remember { mutableStateOf(conversionViewModel.message) }
@@ -252,20 +255,20 @@ class MainActivity : ComponentActivity() {
                                         val documentName = MarkdownFileNames.merged(successful.map { it.name })
                                         val folder = outputFolder
                                         mergeScope.launch {
-                                            val markdown = withContext(Dispatchers.IO) { combineMarkdown(successful) }
-                                            if (folder == null) {
-                                                pendingMarkdown = markdown
-                                                pendingName = documentName
-                                                saver.launch(documentName)
-                                            } else {
-                                                try {
+                                            try {
+                                                val markdown = withContext(Dispatchers.IO) { combineMarkdown(successful) }
+                                                if (folder == null) {
+                                                    pendingMarkdown = markdown
+                                                    pendingName = documentName
+                                                    saver.launch(documentName)
+                                                } else {
                                                     val savedName = withContext(Dispatchers.IO) {
                                                         DocumentStorage.saveToFolder(this@MainActivity, folder, documentName, markdown)
                                                     }
                                                     message = "Dokumen gabungan berhasil disimpan sebagai " + savedName
-                                                } catch (e: Exception) {
-                                                    message = "Gagal menyimpan dokumen gabungan: " + (e.message ?: "kesalahan penyimpanan")
                                                 }
+                                            } catch (error: Exception) {
+                                                message = "Gagal menggabungkan atau menyimpan hasil: " + (error.message ?: "kesalahan tidak diketahui")
                                             }
                                         }
                                     },
@@ -280,15 +283,19 @@ class MainActivity : ComponentActivity() {
                                     onClick = {
                                         val successful = files.filter { it.error == null }
                                         mergeScope.launch {
-                                            val markdown = withContext(Dispatchers.IO) { combineMarkdown(successful) }
-                                            preview = ConvertedFile(
-                                                -1L,
-                                                MarkdownFileNames.merged(successful.map { it.name }),
-                                                "md",
-                                                markdown,
-                                                emptyList(),
-                                                null
-                                            )
+                                            try {
+                                                val markdown = withContext(Dispatchers.IO) { combineMarkdown(successful) }
+                                                preview = ConvertedFile(
+                                                    -1L,
+                                                    MarkdownFileNames.merged(successful.map { it.name }),
+                                                    "md",
+                                                    markdown,
+                                                    emptyList(),
+                                                    null
+                                                )
+                                            } catch (error: Exception) {
+                                                message = "Gagal membuat pratinjau gabungan: " + (error.message ?: "kesalahan tidak diketahui")
+                                            }
                                         }
                                     },
                                     enabled = !busy && successfulCount >= 2,
@@ -338,9 +345,13 @@ class MainActivity : ComponentActivity() {
                                     IconButton(
                                         onClick = {
                                             mergeScope.launch {
-                                                pendingMarkdown = withContext(Dispatchers.IO) { file.readMarkdown() }
-                                                pendingName = MarkdownFileNames.fromSource(file.name)
-                                                saver.launch(pendingName)
+                                                try {
+                                                    pendingMarkdown = withContext(Dispatchers.IO) { file.readMarkdown() }
+                                                    pendingName = MarkdownFileNames.fromSource(file.name)
+                                                    saver.launch(pendingName)
+                                                } catch (error: Exception) {
+                                                    message = "Cache hasil tidak tersedia. Jalankan ulang konversi file ini."
+                                                }
                                             }
                                         },
                                         enabled = file.error == null
@@ -352,8 +363,12 @@ class MainActivity : ComponentActivity() {
                                     OutlinedButton(
                                         onClick = {
                                             mergeScope.launch {
-                                                val markdown = withContext(Dispatchers.IO) { file.readMarkdown() }
-                                                preview = file.copy(markdown = markdown, cacheFilePath = null)
+                                                try {
+                                                    val markdown = withContext(Dispatchers.IO) { file.readMarkdown() }
+                                                    preview = file.copy(markdown = markdown, cacheFilePath = null)
+                                                } catch (error: Exception) {
+                                                    message = "Cache hasil tidak tersedia. Jalankan ulang konversi file ini."
+                                                }
                                             }
                                         },
                                         modifier = Modifier.fillMaxWidth()
