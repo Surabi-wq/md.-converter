@@ -102,6 +102,7 @@ Pemrosesan dilakukan secara lokal. File asli tidak diubah dan tidak diunggah ke 
 - Platform: Android native, Kotlin, Jetpack Compose
 - Minimum SDK: 26
 - Target SDK: 35
+- ABI APK: `arm64-v8a`, `armeabi-v7a`
 - JDK: 17
 - Gradle: 8.9
 - Build debug: `gradle --no-daemon :app:assembleDebug`
