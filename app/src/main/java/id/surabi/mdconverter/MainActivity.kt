@@ -133,7 +133,7 @@ class MainActivity:ComponentActivity(){
     val name=queryName(uri)
     val converted=withContext(Dispatchers.IO){
      try{
-      val result=ConverterEngine.convert(contentResolver,uri,name)
+      val result=ConverterEngine.convert(this@MainActivity,uri,name)
       ConvertedFile(name,result.format,result.markdown,result.warnings,null)
      }catch(e:Exception){
       ConvertedFile(name,name.substringAfterLast('.', "unknown"),"",emptyList(),e.message ?: "Konversi gagal.")
