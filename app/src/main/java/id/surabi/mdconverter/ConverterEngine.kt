@@ -29,10 +29,10 @@ object ConverterEngine {
   val body=when {
    ext=="docx" && isZip -> docx(bytes,warnings)
    ext in setOf("txt","md","log") -> text.trimEnd()
-   ext in setOf("py","js","ts","jsx","tsx","java","kt","c","cpp","cs","php","go","rs","swift","css","scss","sh","bat","sql") -> "``${ext}\n${text.trimEnd()}\n```"
+   ext in setOf("py","js","ts","jsx","tsx","java","kt","c","cpp","cs","php","go","rs","swift","css","scss","sh","bat","sql") -> "```\u0024{ext}\n${text.trimEnd()}\n```"
    ext=="csv" || ext=="tsv" -> table(text,if(ext=="tsv") '\t' else ',')
    ext=="json" -> try { val s=text.trim(); val pretty=if(s.startsWith("[")) JSONArray(s).toString(2) else JSONObject(s).toString(2); "```json\n${pretty}\n```" } catch(_:Exception){error("JSON tidak valid.")}
-   ext in setOf("html","htm","xhtml") -> Html.fromHtml(text.replace(Regex("(?is)<(script|style)[^>]*>.*?</\\\\1>"),""),Html.FROM_HTML_MODE_COMPACT).toString().trim()
+   ext in setOf("html","htm","xhtml") -> Html.fromHtml(text.replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"),""),Html.FROM_HTML_MODE_COMPACT).toString().trim()
    ext=="xml" || ext=="svg" -> "```xml\n${text}\n```"
    ext=="rtf" -> text.replace(Regex("\\\\'[0-9a-fA-F]{2}"),"").replace(Regex("\\\\[a-zA-Z]+-?\\\\d* ?"),"").replace(Regex("[{}]"),"").trim()
    ext=="pdf" -> {warnings.add("PDF dan OCR belum tersedia pada versi ini."); "> PDF belum dapat diekstrak oleh versi aplikasi ini."}
