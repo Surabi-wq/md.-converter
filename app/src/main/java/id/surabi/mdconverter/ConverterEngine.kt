@@ -288,7 +288,9 @@ object ConverterEngine {
 
     private fun html(value: String): String {
         val clean = value.replace(Regex("(?is)<(script|style|noscript)[^>]*>.*?</\\1\\s*>"), "")
-            .replace(Regex("(?i)<(h[1-6])\\b[^>]*>"), "\n\n### ")
+            .replace(Regex("(?i)<h([1-6])\\b[^>]*>")) { match ->
+                "\n\n" + "#".repeat(match.groupValues[1].toInt()) + " "
+            }
             .replace(Regex("(?i)<li\\b[^>]*>"), "\n- ")
             .replace(Regex("(?i)</(p|div|section|article|li|tr|h[1-6]|br|hr)\\s*>"), "\n")
         return Html.fromHtml(clean, Html.FROM_HTML_MODE_COMPACT).toString()
@@ -436,7 +438,23 @@ object ConverterEngine {
                                     1280,
                                     1280
                                 )
-                            } else retriever.getFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                            } else {
+                                val source = retriever.getFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                if (source == null) null else {
+                                    val maxSide = maxOf(source.width, source.height)
+                                    if (maxSide <= 1280) source else {
+                                        val ratio = 1280f / maxSide.toFloat()
+                                        val scaled = Bitmap.createScaledBitmap(
+                                            source,
+                                            (source.width * ratio).toInt().coerceAtLeast(1),
+                                            (source.height * ratio).toInt().coerceAtLeast(1),
+                                            true
+                                        )
+                                        source.recycle()
+                                        scaled
+                                    }
+                                }
+                            }
                         }.getOrNull()
                         if (frame != null) try {
                             val text = runCatching { recognizeText(frame, recognizer) }
