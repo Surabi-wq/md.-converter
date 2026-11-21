@@ -16,6 +16,7 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.google.android.gms.tasks.Tasks
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
+import com.tom_roush.pdfbox.rendering.PDFRenderer
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -532,9 +533,37 @@ object ConverterEngine {
                 paragraphEnd = "\n"
             }
             val result = stripper.getText(document).trim()
-            if (result.isBlank()) error("PDF tidak memiliki lapisan teks. PDF hasil pemindaian memerlukan OCR yang belum tersedia.")
             if (document.numberOfPages > 300) warnings.add("PDF memiliki lebih dari 300 halaman; periksa kelengkapan hasil.")
-            return result
+            if (result.isNotBlank()) return result
+
+            val pageLimit = minOf(document.numberOfPages, 30)
+            if (pageLimit == 0) error("PDF tidak memiliki halaman.")
+            val renderer = PDFRenderer(document)
+            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            val extracted = StringBuilder()
+            try {
+                for (pageIndex in 0 until pageLimit) {
+                    val bitmap = renderer.renderImage(pageIndex, 1.5f)
+                    try {
+                        val pageText = recognizeText(bitmap, recognizer)
+                        if (pageText.isNotBlank()) {
+                            extracted.appendLine("## Halaman ${pageIndex + 1}")
+                            extracted.appendLine(pageText)
+                            extracted.appendLine()
+                        }
+                    } finally {
+                        bitmap.recycle()
+                    }
+                }
+            } finally {
+                recognizer.close()
+            }
+            if (document.numberOfPages > pageLimit) {
+                warnings.add("OCR PDF dibatasi sampai 30 halaman pertama untuk menjaga waktu proses dan penggunaan memori.")
+            }
+            if (extracted.isBlank()) error("PDF tidak memiliki lapisan teks dan OCR tidak menemukan teks yang dapat dibaca.")
+            warnings.add("PDF diproses menggunakan OCR. Tata letak, tabel, dan urutan kolom dapat berbeda dari dokumen asli.")
+            return extracted.toString().trim()
         }
     }
 
