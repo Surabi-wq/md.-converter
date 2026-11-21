@@ -56,8 +56,10 @@ internal object DocumentStorage {
         try {
             val target = context.contentResolver.openOutputStream(output, "wt")
                 ?: error("Tidak dapat membuka file keluaran.")
-            cacheFile.inputStream().buffered().use { input ->
-                target.buffered().use { destination -> input.copyTo(destination, DEFAULT_BUFFER_SIZE) }
+            target.buffered().use { destination ->
+                cacheFile.inputStream().buffered().use { input ->
+                    input.copyTo(destination, DEFAULT_BUFFER_SIZE)
+                }
             }
             return finalName
         } catch (error: Exception) {
