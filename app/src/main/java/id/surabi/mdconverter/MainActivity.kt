@@ -54,7 +54,7 @@ class MainActivity : ComponentActivity() {
         var pendingMarkdown by remember { mutableStateOf<String?>(null) }
         var pendingName by remember { mutableStateOf("hasil-konversi.md") }
         val successfulCount = files.count { it.error == null }
-        val combined = remember(files.toList()) { combineMarkdown(files.filter { it.error == null }) }
+        val combined = remember(files.toList()) { files.filter { it.error == null }.takeIf { it.isNotEmpty() }?.let(::combineMarkdown).orEmpty() }
 
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
             if (uris.isNotEmpty() && !busy) processFiles(uris, files) { isBusy, status ->
