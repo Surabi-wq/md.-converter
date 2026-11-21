@@ -78,12 +78,11 @@ Deteksi format menggunakan kombinasi signature file, MIME dari Android, dan ekst
 - Riwayat dipulihkan saat aplikasi dibuka kembali dan dibatasi hingga 50 hasil atau sekitar 100 MB. Hasil terlama dibersihkan saat batas tercapai; pengguna dapat menghapus seluruh riwayat melalui tombol **Hapus hasil**.
 - Antrean dan status batch dikelola oleh `ViewModel`, sehingga pergantian orientasi layar tidak menghilangkan hasil yang sudah selesai.
 - Pembatalan dilakukan dengan aman pada batas antarfile: file yang sedang aktif dituntaskan terlebih dahulu, sedangkan file yang belum diproses dikembalikan ke antrean.
-- Penggabungan Markdown hanya dihitung ketika diminta, bukan setiap kali daftar hasil berubah.
 - Nama file antrean dibaca di thread latar, dan izin baca SAF disimpan saat penyedia dokumen mengizinkan.
 - Penggabungan Markdown hanya dihitung ketika diminta, bukan setiap kali daftar hasil berubah. Ekspor dokumen gabungan menulis isi berkas riwayat secara bertahap, bukan menggabungkan seluruh sumber menjadi satu string besar di RAM.
 - Pratinjau dokumen gabungan dibatasi untuk sumber hingga sekitar 8 MB; ekspor langsung tetap tersedia untuk dokumen yang lebih besar.
 - Preview satu file menampilkan judul, paragraf, daftar, tabel, kutipan, dan blok kode sebagai elemen visual, sementara file ekspor tetap berupa Markdown asli.
-- Pemindaian ZIP membatasi jumlah entri, ukuran entri, dan total data dekompresi termasuk entri yang dilewati.
+- Pemindaian ZIP membatasi jumlah entri, ukuran entri, dan total data dekompresi termasuk entri yang dilewati. XLSX/ODS juga membatasi hasil hingga 5.000 baris dan 256 kolom per lembar, serta memberi peringatan ketika hasil dipotong.
 - CSV mencoba mendeteksi pemisah koma, titik koma, tab, dan pipe. JSON/JSONL kini menerima nilai primitif seperti string, angka, boolean, dan null.
 - Signature AAC ADTS, frame MPEG audio, dan Opus di dalam Ogg dibedakan lebih baik.
 
