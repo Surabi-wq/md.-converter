@@ -513,10 +513,10 @@ class MainActivity : ComponentActivity() {
                     onDismissRequest = { preview = null },
                     title = { Text(if (item.id == -1L) "Preview Markdown Gabungan" else "Preview Markdown") },
                     text = {
-                        Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                        Column(Modifier.heightIn(max = 460.dp)) {
                             Text(item.name, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(8.dp))
-                            Text(item.markdown, fontSize = 12.sp)
+                            MarkdownPreview(item.markdown, Modifier.heightIn(max = 390.dp).fillMaxWidth())
                         }
                     },
                     confirmButton = {
