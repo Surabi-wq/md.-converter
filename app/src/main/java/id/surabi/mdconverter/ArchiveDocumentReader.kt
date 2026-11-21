@@ -18,6 +18,7 @@ internal object ArchiveDocumentReader {
     private const val MAX_ARCHIVE_UNCOMPRESSED_BYTES = 80L * 1024 * 1024
     private const val MAX_ARCHIVE_ENTRIES = 10_000
     private const val MAX_ROWS_PER_SHEET = 5000
+    private const val MAX_COLUMNS_PER_SHEET = 256
 
     fun convert(extension: String, bytes: ByteArray, warnings: MutableList<String>): String =
         when (extension) {
@@ -91,7 +92,8 @@ internal object ArchiveDocumentReader {
         require(sheets.isNotEmpty()) { "XLSX tidak memiliki lembar kerja yang dapat dibaca." }
         warnings.add("XLSX: nilai sel yang tersimpan diekstrak. Rumus tidak dihitung ulang dan format visual tidak dipertahankan.")
         return sheets.entries.mapIndexed { index, entry ->
-            "## Lembar " + (index + 1) + "\n\n" + renderTable(xlsxRows(entry.value, strings))
+            val label = "Lembar " + (index + 1)
+            "## " + label + "\n\n" + renderTable(xlsxRows(entry.value, strings, warnings, label))
         }.joinToString("\n\n")
     }
 
@@ -122,9 +124,11 @@ internal object ArchiveDocumentReader {
         return result
     }
 
-    private fun xlsxRows(xml: String, shared: List<String>): List<List<String>> {
+    private fun xlsxRows(xml: String, shared: List<String>, warnings: MutableList<String>, sheetLabel: String): List<List<String>> {
         val parser = parser(xml)
         val rows = mutableListOf<List<String>>()
+        var truncatedRows = false
+        var truncatedColumns = false
         var row = sortedMapOf<Int, String>()
         var inCell = false
         var cellType = ""
@@ -149,7 +153,8 @@ internal object ArchiveDocumentReader {
                     "v", "t" -> capture = false
                     "c" -> {
                         val index = columnIndex(cellRef)
-                        if (index >= 0) {
+                        if (index >= MAX_COLUMNS_PER_SHEET) truncatedColumns = true
+                        if (index >= 0 && index < MAX_COLUMNS_PER_SHEET) {
                             val raw = cellValue.toString()
                             val value = when (cellType) {
                                 "s" -> shared.getOrNull(raw.toIntOrNull() ?: -1).orEmpty()
@@ -160,14 +165,18 @@ internal object ArchiveDocumentReader {
                         }
                         inCell = false
                     }
-                    "row" -> if (row.isNotEmpty() && rows.size < MAX_ROWS_PER_SHEET) {
-                        val width = row.lastKey() + 1
-                        rows.add((0 until width).map { row[it].orEmpty() })
+                    "row" -> if (row.isNotEmpty()) {
+                        if (rows.size < MAX_ROWS_PER_SHEET) {
+                            val width = minOf(row.lastKey() + 1, MAX_COLUMNS_PER_SHEET)
+                            rows.add((0 until width).map { row[it].orEmpty() })
+                        } else truncatedRows = true
                     }
                 }
             }
             event = parser.next()
         }
+        if (truncatedRows) warnings.add("XLSX: sebagian baris pada " + sheetLabel + " tidak ditampilkan karena batas 5.000 baris.")
+        if (truncatedColumns) warnings.add("XLSX: kolom setelah kolom ke-256 pada " + sheetLabel + " tidak ditampilkan demi membatasi memori.")
         return rows
     }
 
@@ -175,7 +184,10 @@ internal object ArchiveDocumentReader {
         val letters = reference.takeWhile { it.isLetter() }.uppercase()
         if (letters.isEmpty()) return -1
         var result = 0
-        letters.forEach { result = result * 26 + (it - 'A' + 1) }
+        letters.forEach {
+            result = result * 26 + (it - 'A' + 1)
+            if (result > MAX_COLUMNS_PER_SHEET) return MAX_COLUMNS_PER_SHEET
+        }
         return result - 1
     }
 
@@ -188,6 +200,8 @@ internal object ArchiveDocumentReader {
         var sheetName = "Lembar"
         var rows = mutableListOf<List<String>>()
         var row = mutableListOf<String>()
+        var truncatedRows = false
+        var truncatedColumns = false
         var cell = StringBuilder()
         var inCell = false
         var inParagraph = false
@@ -200,6 +214,8 @@ internal object ArchiveDocumentReader {
                         sheetName = attr(parser, "name", "urn:oasis:names:tc:opendocument:xmlns:table:1.0")
                             ?: "Lembar " + (sheets.size + 1)
                         rows = mutableListOf()
+                        truncatedRows = false
+                        truncatedColumns = false
                     }
                     "table-row" -> row = mutableListOf()
                     "table-cell", "covered-table-cell" -> {
@@ -213,11 +229,21 @@ internal object ArchiveDocumentReader {
                 XmlPullParser.END_TAG -> when (parser.name) {
                     "p" -> if (inCell) { cell.append(' '); inParagraph = false }
                     "table-cell", "covered-table-cell" -> {
-                        repeat(repeatColumns) { row.add(cell.toString().trim()) }
+                        repeat(repeatColumns) {
+                            if (row.size < MAX_COLUMNS_PER_SHEET) row.add(cell.toString().trim())
+                            else truncatedColumns = true
+                        }
                         inCell = false
                     }
-                    "table-row" -> if (row.isNotEmpty() && rows.size < MAX_ROWS_PER_SHEET) rows.add(row.toList())
-                    "table" -> if (rows.isNotEmpty()) sheets.add(sheetName to rows)
+                    "table-row" -> if (row.isNotEmpty()) {
+                        if (rows.size < MAX_ROWS_PER_SHEET) rows.add(row.toList())
+                        else truncatedRows = true
+                    }
+                    "table" -> if (rows.isNotEmpty()) {
+                        sheets.add(sheetName to rows)
+                        if (truncatedRows) warnings.add("ODS: sebagian baris pada '" + sheetName + "' tidak ditampilkan karena batas 5.000 baris.")
+                        if (truncatedColumns) warnings.add("ODS: kolom setelah kolom ke-256 pada '" + sheetName + "' tidak ditampilkan demi membatasi memori.")
+                    }
                 }
             }
             event = parser.next()
@@ -463,6 +489,7 @@ internal object ArchiveDocumentReader {
     private fun parser(xml: String): XmlPullParser {
         val parser = Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
+        runCatching { parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) }
         parser.setInput(xml.reader())
         return parser
     }
