@@ -32,6 +32,16 @@ object ConverterEngine {
     private val codeTypes = setOf("py","js","ts","jsx","tsx","java","kt","kts","c","h","cpp","hpp","cs","php","go","rs","swift","css","scss","sass","sh","bash","bat","ps1","sql","rb","r","lua","dart","scala")
 
     fun convert(context: Context, uri: Uri, name: String): ConversionResult {
+        val ext = name.substringAfterLast('.', "").lowercase()
+        val warnings = mutableListOf<String>()
+        val title = name.substringBeforeLast('.', name).replace("\\", "\\\\").replace("#", "\\#")
+
+        // Metadata extraction reads the SAF URI directly; large media is never copied into RAM.
+        if (ext in audioTypes || ext in videoTypes) {
+            val body = mediaToMarkdown(context, uri, name, ext in videoTypes, warnings)
+            return ConversionResult("# $title\n\n$body\n", ext, warnings.distinct())
+        }
+
         val resolver = context.contentResolver
         val bytes = resolver.openInputStream(uri)?.use { input ->
             val output = ByteArrayOutputStream()
@@ -47,18 +57,14 @@ object ConverterEngine {
             output.toByteArray()
         } ?: error("File tidak dapat dibaca. Periksa izin akses dokumen.")
         require(bytes.isNotEmpty()) { "File kosong." }
-        val ext = name.substringAfterLast('.', "").lowercase()
-        val warnings = mutableListOf<String>()
-        val text = decode(bytes)
+        val text = if (ext in codeTypes || ext in setOf("txt","md","markdown","log","csv","tsv","json","jsonl","ndjson","html","htm","xhtml","rtf","yaml","yml","toml","ini","xml","svg","eml","mhtml","ics","vcf")) decode(bytes) else ""
         val body = when {
             ext == "pdf" -> pdf(bytes, warnings)
             ext == "docx" -> docx(bytes, warnings)
             ext in imageTypes -> imageToMarkdown(bytes, ext, warnings)
-            ext in audioTypes -> mediaToMarkdown(context, uri, name, false, warnings)
-            ext in videoTypes -> mediaToMarkdown(context, uri, name, true, warnings)
             ext in setOf("txt","md","markdown","log") -> text.trimEnd()
             ext in codeTypes -> fenced(ext, text)
-            ext == "csv" || ext == "tsv" -> table(text, if (ext == "tsv") '\t' else ',')
+            ext == "csv" || ext == "tsv" -> table(text, if (ext == "tsv") '\\t' else ',')
             ext == "json" -> json(text)
             ext in setOf("jsonl","ndjson") -> jsonl(text)
             ext in setOf("html","htm","xhtml") -> html(text)
@@ -67,7 +73,6 @@ object ConverterEngine {
             else -> error("Format .$ext belum didukung. File asli tidak diubah.")
         }
         require(body.isNotBlank()) { "Tidak ditemukan teks yang dapat diekstrak. File mungkin berupa hasil scan/gambar atau kosong." }
-        val title = name.substringBeforeLast('.', name).replace("\\", "\\\\").replace("#", "\\#")
         return ConversionResult("# $title\n\n$body\n", ext.ifBlank { "unknown" }, warnings.distinct())
     }
 
