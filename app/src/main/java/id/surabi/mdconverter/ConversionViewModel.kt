@@ -56,7 +56,7 @@ internal class ConversionViewModel : ViewModel() {
             persistHistory(appContext)
             historyReady = true
             if (restored.isNotEmpty()) {
-                message = "Riwayat lokal dipulihkan: \${restored.size} hasil. Hasil disimpan di perangkat ini."
+                message = "Riwayat lokal dipulihkan: ${restored.size} hasil. Hasil disimpan di perangkat ini."
             }
         }
     }
@@ -71,12 +71,13 @@ internal class ConversionViewModel : ViewModel() {
             completed = 0
             total = uris.size
             progress = 0f
-            message = "Menyiapkan \${uris.size} file…"
+            message = "Menyiapkan ${uris.size} file…"
             var savedCount = 0
             var wasCancelled = false
             var historyTrimmed = false
             val saveErrors = mutableListOf<String>()
             val batchResults = mutableListOf<ConvertedFile>()
+            var nextIndex = 0
 
             try {
                 for ((index, uri) in uris.withIndex()) {
@@ -118,6 +119,7 @@ internal class ConversionViewModel : ViewModel() {
                     files.add(converted)
                     batchResults.add(converted)
                     completed++
+                    nextIndex = index + 1
                     progress = completed.toFloat() / total.coerceAtLeast(1)
                     message = "Memproses file $completed dari $total…"
 
@@ -173,7 +175,9 @@ internal class ConversionViewModel : ViewModel() {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                message = "Proses terhenti: " + (error.message ?: "kesalahan tidak diketahui")
+                if (nextIndex < uris.size) selectedUris.addAll(uris.drop(nextIndex))
+                message = "Proses terhenti: " + (error.message ?: "kesalahan tidak diketahui") +
+                    " File yang belum diproses dikembalikan ke antrean."
             } finally {
                 busy = false
                 cancelRequested = false
