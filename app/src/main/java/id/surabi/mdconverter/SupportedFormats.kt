@@ -29,7 +29,7 @@ internal object SupportedFormats {
         FormatGroup(
             "Dokumen dan e-book",
             listOf("pdf", "docx", "odt", "xlsx", "pptx", "ods", "odp", "epub", "ipynb"),
-            "DOCX/ODT, spreadsheet, presentasi, EPUB, dan notebook diekstrak sebagai teks. Tata letak kompleks, rumus yang belum dihitung, dan media tertanam tidak selalu dipertahankan."
+            "PDF berbasis teks dan PDF scan (OCR lokal maksimal 50 halaman), DOCX/ODT, spreadsheet, presentasi, EPUB, dan notebook diekstrak sesuai struktur yang dapat dibaca. Tata letak kompleks, rumus yang belum dihitung, dan media tertanam tidak selalu dipertahankan."
         ),
         FormatGroup(
             "Teks, data, dan subtitle",
@@ -54,7 +54,7 @@ internal object SupportedFormats {
         FormatGroup(
             "Video",
             videoTypes.sorted(),
-            "Metadata video dan OCR dari maksimal tiga cuplikan yang dipilih dari durasi video. Ini bukan transkrip dialog."
+            "Metadata video dan OCR hingga tiga cuplikan skala kecil pada Android 8.1/API 27+. Ini bukan transkrip dialog."
         )
     )
 }
