@@ -374,7 +374,7 @@ object ConverterEngine {
             when (event) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "p" -> { inParagraph = true; paragraph = StringBuilder(); style = "" }
-                    "pStyle" -> style = parser.getAttributeValue(null, "val") ?: ""
+                    "pStyle" -> style = parser.getAttributeValue("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "val") ?: parser.getAttributeValue(null, "val") ?: ""
                     "t" -> inText = true
                     "tab" -> if (inParagraph) paragraph.append("    ")
                     "br", "cr" -> if (inParagraph) paragraph.append('\n')
