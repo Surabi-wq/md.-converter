@@ -145,8 +145,11 @@ object ConverterEngine {
                 when {
                     brand == "qt  " -> "mov"
                     brand.startsWith("M4V") -> "m4v"
-                    brand in setOf("M4A ", "M4B ", "F4A ", "F4B ") -> "m4a"
+                    brand in setOf("M4A ", "M4B ", "F4A ", "F4B ") -> if (brand == "M4B ") "m4b" else "m4a"
                     brand in setOf("avif", "avis") -> "avif"
+                    brand in setOf("heic", "heix", "hevc", "hevx") -> "heic"
+                    brand in setOf("mif1", "msf1") -> "heif"
+                    brand.startsWith("3g2") -> "3g2"
                     brand.startsWith("3g") -> "3gp"
                     mime.startsWith("audio/") -> "m4a"
                     else -> "mp4"
@@ -164,6 +167,7 @@ object ConverterEngine {
             else -> ""
         }
         if (signature.isNotBlank()) return signature
+        if (fromName in SupportedFormats.supportedTypes) return fromName
         byMime[mime]?.let { return it }
         return fromName.takeIf { it.isNotBlank() && it !in setOf("bin", "dat", "tmp", "file") }.orEmpty()
     }
@@ -316,7 +320,7 @@ object ConverterEngine {
         while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 2048) sample *= 2
         val options = BitmapFactory.Options().apply {
             inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.RGB_565
+            inPreferredConfig = if (ext in setOf("jpg", "jpeg")) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
             inDither = true
         }
         val bitmap = context.contentResolver.openInputStream(uri)?.use {
