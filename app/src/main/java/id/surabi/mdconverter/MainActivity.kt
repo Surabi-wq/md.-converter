@@ -289,18 +289,20 @@ class MainActivity : ComponentActivity() {
                                 if (selectedUris.isNotEmpty()) {
                                     Text("File terpilih (${selectedUris.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF315F55))
                                     selectedUris.take(4).forEach { uri ->
-                                        val displayName by produceState(initialValue = "Memuat nama file…", key1 = uri) {
-                                            val resolvedName = withContext(Dispatchers.IO) {
+                                        val displayName = remember(uri) {
+                                            mutableStateOf("Memuat nama file…")
+                                        }
+                                        LaunchedEffect(uri) {
+                                            displayName.value = withContext(Dispatchers.IO) {
                                                 runCatching { DocumentStorage.queryName(this@MainActivity, uri) }
                                                     .getOrDefault("File terpilih")
                                             }
-                                            value = resolvedName
                                         }
                                         Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFFF1F5F2)) {
                                             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                                                 Icon(Icons.AutoMirrored.Filled.InsertDriveFile, null, tint = Color(0xFF315F55), modifier = Modifier.size(20.dp))
                                                 Spacer(Modifier.width(8.dp))
-                                                Text(displayName.take(48), fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                                Text(displayName.value.take(48), fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                                                 IconButton(onClick = {
                                                     selectedUris.remove(uri)
                                                     DocumentStorage.releaseReadPermission(this@MainActivity, uri)
@@ -464,7 +466,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.InsertDriveFile, null, tint = Color(0xFF315F55))
+                                    Icon(Icons.AutoMirrored.Filled.InsertDriveFile, null, tint = Color(0xFF315F55))
                                     Spacer(Modifier.width(9.dp))
                                     Column(Modifier.weight(1f)) {
                                         Text(file.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
@@ -560,7 +562,7 @@ class MainActivity : ComponentActivity() {
                     onDismissRequest = { showHelp = false },
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Default.HelpOutline, contentDescription = null, tint = Color(0xFF315F55))
+                            Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null, tint = Color(0xFF315F55))
                             Text("Panduan penggunaan Marka")
                         }
                     },
