@@ -62,7 +62,12 @@ class MainActivity : ComponentActivity() {
         val combined = remember(files.toList()) { files.filter { it.error == null }.takeIf { it.isNotEmpty() }?.let(::combineMarkdown).orEmpty() }
 
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-            if (uris.isNotEmpty() && !busy) { selectedUris.clear(); selectedUris.addAll(uris); message = "${uris.size} file dipilih. Tekan konfirmasi untuk memulai." }
+            if (uris.isNotEmpty() && !busy) {
+                val existing = selectedUris.map { it.toString() }.toHashSet()
+                val fresh = uris.filter { existing.add(it.toString()) }
+                selectedUris.addAll(fresh)
+                message = if (fresh.isEmpty()) "File yang dipilih sudah ada di antrean." else "${fresh.size} file ditambahkan. Total ${selectedUris.size} file menunggu konfirmasi."
+            }
         }
         val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
             if (tree != null) runCatching {
@@ -120,15 +125,33 @@ class MainActivity : ComponentActivity() {
                             colors = CardDefaults.cardColors(containerColor = Color(0xFFE3EEE9))
                         ) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                                Text("Konversi dan gabungkan file ke Markdown", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = Color(0xFF183D36))
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFF315F55)) {
+                                        Icon(Icons.Default.Description, null, tint = Color.White, modifier = Modifier.padding(9.dp).size(22.dp))
+                                    }
+                                    Column(Modifier.weight(1f)) {
+                                        Text("MD Converter", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF183D36))
+                                        Text("Konversi dokumen ke Markdown", fontSize = 12.sp, color = Color(0xFF49635D))
+                                    }
+                                }
                                 Text(
-                                    "Pilih berbagai jenis file sekaligus. Setiap hasil akan menjadi bagian tersendiri dalam satu dokumen Markdown.",
+                                    "Pilih beberapa dokumen atau media. Hasilnya dapat ditinjau, diekspor satu per satu, atau digabungkan dalam satu dokumen terstruktur.",
                                     color = Color(0xFF49635D)
                                 )
                                 Button(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
                                     Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp)); Text("1. Pilih file")
                                 }
-                                Text("${selectedUris.size} file menunggu konfirmasi", fontSize = 12.sp, color = Color.Gray)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("${selectedUris.size} file menunggu konfirmasi", fontSize = 12.sp, color = Color.Gray, modifier = Modifier.weight(1f))
+                                    if (selectedUris.isNotEmpty()) TextButton(onClick = { selectedUris.clear(); message = "Antrean pilihan dikosongkan." }, enabled = !busy) { Text("Kosongkan") }
+                                }
+                                if (selectedUris.isNotEmpty()) {
+                                    Text(
+                                        selectedUris.take(4).joinToString("\n") { it.lastPathSegment?.substringAfterLast('/')?.take(48) ?: "Dokumen terpilih" } +
+                                            if (selectedUris.size > 4) "\n+ ${selectedUris.size - 4} file lainnya" else "",
+                                        fontSize = 11.sp, color = Color(0xFF49635D), maxLines = 5
+                                    )
+                                }
                                 Button(onClick = {
                                     files.clear()
                                     val batch = selectedUris.toList()
@@ -147,9 +170,19 @@ class MainActivity : ComponentActivity() {
 
                     item {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Antrean konversi", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.weight(1f))
-                            Text("${files.size} file • $successfulCount berhasil", color = Color.Gray, fontSize = 12.sp)
+                            Column(Modifier.weight(1f)) {
+                                Text("Hasil konversi", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                Text("${files.size} file diproses", color = Color.Gray, fontSize = 12.sp)
+                            }
+                            AssistChip(
+                                onClick = {},
+                                label = { Text("$successfulCount berhasil") },
+                                leadingIcon = { Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(16.dp)) },
+                                enabled = false
+                            )
+                            if (files.any { it.error != null }) {
+                                AssistChip(onClick = {}, label = { Text("${files.count { it.error != null }} gagal") }, enabled = false)
+                            }
                         }
                     }
 
