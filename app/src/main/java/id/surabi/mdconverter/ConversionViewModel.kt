@@ -152,6 +152,7 @@ internal class ConversionViewModel : ViewModel() {
                         }
                     }
 
+                    DocumentStorage.releaseReadPermission(appContext, uri)
                     historyTrimmed = enforceHistoryLimits() || historyTrimmed
                     persistHistory(appContext)
 
