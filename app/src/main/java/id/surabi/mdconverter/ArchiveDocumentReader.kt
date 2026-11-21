@@ -1,6 +1,7 @@
 package id.surabi.mdconverter
 
 import android.text.Html
+import android.net.Uri
 import android.util.Xml
 import org.json.JSONArray
 import org.json.JSONObject
@@ -276,16 +277,112 @@ internal object ArchiveDocumentReader {
     private fun epub(bytes: ByteArray, warnings: MutableList<String>): String {
         val entries = readEntries(bytes) {
             val lower = it.lowercase()
-            (lower.endsWith(".xhtml") || lower.endsWith(".html") || lower.endsWith(".htm")) &&
-                !lower.startsWith("meta-inf/") && !lower.contains("nav.xhtml") && !lower.contains("toc.xhtml")
+            lower == "meta-inf/container.xml" ||
+                lower.endsWith(".opf") ||
+                ((lower.endsWith(".xhtml") || lower.endsWith(".html") || lower.endsWith(".htm")) &&
+                    !lower.startsWith("meta-inf/") && !lower.contains("nav.xhtml") && !lower.contains("toc.xhtml"))
         }
-        require(entries.isNotEmpty()) { "EPUB tidak memiliki bab HTML/XHTML yang dapat dibaca." }
-        warnings.add("EPUB: bab teks diekstrak berdasarkan urutan nama file. Urutan bacaan berdasarkan spine EPUB dapat berbeda pada sebagian buku.")
-        return entries.entries.take(300).mapIndexed { index, entry ->
-            val title = entry.key.substringAfterLast('/').substringBeforeLast('.').replace('-', ' ').replace('_', ' ')
-            "## " + title.ifBlank { "Bab " + (index + 1) } + "\n\n" + htmlText(entry.value)
-        }.filter { it.substringAfter("\n\n").isNotBlank() }.joinToString("\n\n")
-            .ifBlank { error("Tidak ditemukan teks bab pada EPUB.") }
+        val chapterEntries = entries.filterKeys(::isEpubChapter)
+        require(chapterEntries.isNotEmpty()) { "EPUB tidak memiliki bab HTML/XHTML yang dapat dibaca." }
+
+        val spineOrder = epubSpineOrder(entries)
+        val orderedPaths = spineOrder
+            ?.filter { chapterEntries.containsKey(it) }
+            ?.distinct()
+            ?.takeIf { it.isNotEmpty() }
+            ?: run {
+                warnings.add("EPUB: manifest atau spine tidak dapat dibaca; bab diurutkan menurut urutan entri ZIP. Urutan ini dapat berbeda dari urutan bacaan buku.")
+                chapterEntries.keys.toList()
+            }
+
+        if (orderedPaths.size > 300) warnings.add("EPUB: hanya 300 bab pertama menurut urutan bacaan yang diekstrak.")
+        val output = orderedPaths.take(300).mapIndexedNotNull { index, path ->
+            val source = chapterEntries[path] ?: return@mapIndexedNotNull null
+            val title = path.substringAfterLast('/').substringBeforeLast('.').replace('-', ' ').replace('_', ' ')
+            val text = htmlText(source)
+            if (text.isBlank()) null
+            else "## " + title.ifBlank { "Bab " + (index + 1) } + "\n\n" + text
+        }.joinToString("\n\n")
+
+        if (spineOrder != null) {
+            warnings.add("EPUB: urutan bab mengikuti spine pada paket EPUB; tata letak, gambar tertanam, dan catatan kaki mungkin tidak dipertahankan.")
+        }
+        return output.ifBlank { error("Tidak ditemukan teks bab pada EPUB.") }
+    }
+
+    private fun isEpubChapter(path: String): Boolean {
+        val lower = path.lowercase()
+        return (lower.endsWith(".xhtml") || lower.endsWith(".html") || lower.endsWith(".htm")) &&
+            !lower.startsWith("meta-inf/") &&
+            !lower.substringAfterLast('/').startsWith("nav.") &&
+            !lower.substringAfterLast('/').startsWith("toc.")
+    }
+
+    private fun epubSpineOrder(entries: Map<String, String>): List<String>? {
+        val containerPath = entries.keys.firstOrNull { it.equals("META-INF/container.xml", ignoreCase = true) }
+            ?: return null
+        val containerParser = parser(entries[containerPath] ?: return null)
+        var packagePath: String? = null
+        var event = containerParser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            if (event == XmlPullParser.START_TAG && containerParser.name == "rootfile") {
+                packagePath = attr(containerParser, "full-path")
+                if (!packagePath.isNullOrBlank()) break
+            }
+            event = containerParser.next()
+        }
+        val resolvedPackagePath = packagePath?.let { resolveEpubPath("", it) } ?: return null
+        val opf = entries[resolvedPackagePath] ?: return null
+        val basePath = resolvedPackagePath.substringBeforeLast('/', "")
+        val manifest = linkedMapOf<String, Pair<String, String>>()
+        val spineRefs = mutableListOf<String>()
+        val opfParser = parser(opf)
+        event = opfParser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            if (event == XmlPullParser.START_TAG) {
+                when (opfParser.name) {
+                    "item" -> {
+                        val id = attr(opfParser, "id")
+                        val href = attr(opfParser, "href")
+                        val mediaType = attr(opfParser, "media-type").orEmpty()
+                        if (!id.isNullOrBlank() && !href.isNullOrBlank()) {
+                            manifest[id] = href to mediaType
+                        }
+                    }
+                    "itemref" -> {
+                        val idRef = attr(opfParser, "idref")
+                        if (!idRef.isNullOrBlank()) spineRefs.add(idRef)
+                    }
+                }
+            }
+            event = opfParser.next()
+        }
+
+        val ordered = spineRefs.mapNotNull { idRef ->
+            val (href, mediaType) = manifest[idRef] ?: return@mapNotNull null
+            if (mediaType.isNotBlank() && mediaType !in setOf("application/xhtml+xml", "text/html")) {
+                return@mapNotNull null
+            }
+            resolveEpubPath(basePath, href)?.takeIf(::isEpubChapter)
+        }
+        return ordered.takeIf { it.isNotEmpty() }
+    }
+
+    private fun resolveEpubPath(basePath: String, href: String): String? {
+        val cleanHref = Uri.decode(href.substringBefore('#').substringBefore('?'))
+            .replace('\\', '/')
+        if (cleanHref.isBlank()) return null
+        val combined = if (cleanHref.startsWith('/')) cleanHref.drop(1)
+            else listOf(basePath, cleanHref).filter { it.isNotBlank() }.joinToString("/")
+        val segments = mutableListOf<String>()
+        combined.split('/').forEach { segment ->
+            when (segment) {
+                "", "." -> Unit
+                ".." -> if (segments.isNotEmpty()) segments.removeAt(segments.lastIndex) else return null
+                else -> segments.add(segment)
+            }
+        }
+        return segments.joinToString("/").takeIf { it.isNotBlank() }
     }
 
     private fun notebook(bytes: ByteArray): String {
