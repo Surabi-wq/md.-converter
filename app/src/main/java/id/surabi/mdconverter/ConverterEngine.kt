@@ -18,6 +18,7 @@ import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 import org.xmlpull.v1.XmlPullParser
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -76,7 +77,11 @@ object ConverterEngine {
             ext == "docx" -> docx(bytes, warnings)
             ext in setOf("txt", "md", "markdown", "mdx", "log", "rst", "adoc", "tex") -> text.trimEnd()
             ext in codeTypes -> fenced(ext, text)
-            ext == "csv" || ext == "tsv" -> table(text, if (ext == "tsv") '\t' else ',')
+            ext == "csv" || ext == "tsv" -> {
+                val delimiter = if (ext == "tsv") '\t' else detectCsvDelimiter(text)
+                if (ext == "csv" && delimiter == ';') warnings.add("CSV: pemisah titik koma (;) dideteksi otomatis.")
+                table(text, delimiter)
+            }
             ext == "json" -> json(text)
             ext == "jsonl" || ext == "ndjson" -> jsonl(text)
             ext in setOf("html", "htm", "xhtml") -> html(text)
@@ -117,7 +122,7 @@ object ConverterEngine {
         )
         val head = runCatching {
             context.contentResolver.openInputStream(uri)?.use { input ->
-                val buffer = ByteArray(32)
+                val buffer = ByteArray(128)
                 var count = 0
                 while (count < buffer.size) {
                     val read = input.read(buffer, count, buffer.size - count)
@@ -178,22 +183,29 @@ object ConverterEngine {
         return runCatching {
             context.contentResolver.openInputStream(uri)?.use { raw ->
                 java.util.zip.ZipInputStream(raw).use { zip ->
+                    var totalUncompressed = 0L
+                    var entryCount = 0
                     while (true) {
                         val entry = zip.nextEntry ?: break
+                        entryCount++
+                        require(entryCount <= 5000) { "Arsip memiliki terlalu banyak entri." }
                         names.add(entry.name)
-                        if (entry.name == "mimetype") {
-                            val output = ByteArrayOutputStream()
-                            val buffer = ByteArray(128)
-                            while (output.size() < 128) {
-                                val count = zip.read(buffer, 0, minOf(buffer.size, 128 - output.size()))
-                                if (count <= 0) break
-                                output.write(buffer, 0, count)
+                        val output = if (entry.name == "mimetype") ByteArrayOutputStream() else null
+                        val buffer = ByteArray(8192)
+                        while (true) {
+                            val count = zip.read(buffer)
+                            if (count < 0) break
+                            totalUncompressed += count
+                            require(totalUncompressed <= 128L * 1024 * 1024) {
+                                "Data hasil ekstraksi arsip melebihi batas aman 128 MB."
                             }
-                            openDocumentMime = output.toString("UTF-8").trim()
+                            if (output != null && output.size() < 128) {
+                                output.write(buffer, 0, minOf(count, 128 - output.size()))
+                            }
                         }
+                        if (output != null) openDocumentMime = output.toString("UTF-8").trim()
                         if (names.contains("word/document.xml") || names.contains("xl/workbook.xml") ||
                             names.contains("ppt/presentation.xml") || names.contains("META-INF/container.xml")) break
-                        zip.closeEntry()
                     }
                 }
             }
@@ -229,26 +241,44 @@ object ConverterEngine {
         return "$fence$ext\n${value.trimEnd()}\n$fence"
     }
 
-    private fun json(value: String): String {
-        val source = value.trim()
-        require(source.isNotEmpty()) { "JSON kosong." }
-        val result = when (source.first()) {
-            '{' -> JSONObject(source).toString(2)
-            '[' -> JSONArray(source).toString(2)
-            else -> error("JSON harus berupa objek atau array.")
+    private fun normalizeJson(source: String): String {
+        require(source.isNotBlank()) { "JSON kosong." }
+        val parser = JSONTokener(source)
+        val parsed = parser.nextValue()
+        require(parser.nextClean() == '\u0000') { "JSON memiliki data tambahan setelah nilai utama." }
+        return when (parsed) {
+            is JSONObject -> parsed.toString(2)
+            is JSONArray -> parsed.toString(2)
+            else -> source
         }
-        return fenced("json", result)
     }
+
+    private fun json(value: String): String = fenced("json", normalizeJson(value.trim()))
 
     private fun jsonl(value: String): String {
         val items = value.lineSequence().filter { it.isNotBlank() }.mapIndexed { i, line ->
-            runCatching {
-                val s = line.trim()
-                if (s.startsWith("{")) JSONObject(s).toString(2) else JSONArray(s).toString(2)
-            }.getOrElse { error("JSONL tidak valid pada baris ${i + 1}.") }
+            runCatching { normalizeJson(line.trim()) }
+                .getOrElse { error("JSONL tidak valid pada baris ${i + 1}: ${it.message ?: "nilai JSON salah"}.") }
         }.toList()
         require(items.isNotEmpty()) { "File JSONL kosong." }
         return items.mapIndexed { i, item -> "### Record ${i + 1}\n\n${fenced("json", item)}" }.joinToString("\n\n")
+    }
+
+    private fun detectCsvDelimiter(value: String): Char {
+        val firstLine = value.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+        val counts = linkedMapOf(',' to 0, ';' to 0, '\t' to 0)
+        var quoted = false
+        var index = 0
+        while (index < firstLine.length) {
+            val char = firstLine[index]
+            when {
+                char == '"' && quoted && index + 1 < firstLine.length && firstLine[index + 1] == '"' -> index++
+                char == '"' -> quoted = !quoted
+                !quoted && counts.containsKey(char) -> counts[char] = counts.getValue(char) + 1
+            }
+            index++
+        }
+        return counts.maxByOrNull { it.value }?.key?.takeIf { counts.getValue(it) > 0 } ?: ','
     }
 
     private fun table(value: String, delimiter: Char): String {
@@ -288,7 +318,9 @@ object ConverterEngine {
 
     private fun html(value: String): String {
         val clean = value.replace(Regex("(?is)<(script|style|noscript)[^>]*>.*?</\\1\\s*>"), "")
-            .replace(Regex("(?i)<(h[1-6])\\b[^>]*>"), "\n\n### ")
+            .replace(Regex("(?i)<h([1-6])\\b[^>]*>")) { match ->
+                "\n\n" + "#".repeat(match.groupValues[1].toInt()) + " "
+            }
             .replace(Regex("(?i)<li\\b[^>]*>"), "\n- ")
             .replace(Regex("(?i)</(p|div|section|article|li|tr|h[1-6]|br|hr)\\s*>"), "\n")
         return Html.fromHtml(clean, Html.FROM_HTML_MODE_COMPACT).toString()
@@ -428,15 +460,30 @@ object ConverterEngine {
                 try {
                     points.distinct().forEachIndexed { index, ms ->
                         val frame = runCatching {
-                            if (ms < 0) retriever.getFrameAtTime()
-                            else if (Build.VERSION.SDK_INT >= 27) {
-                                retriever.getScaledFrameAtTime(
+                            val source = when {
+                                ms < 0 -> retriever.getFrameAtTime()
+                                Build.VERSION.SDK_INT >= 27 -> retriever.getScaledFrameAtTime(
                                     ms * 1000,
                                     MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
                                     1280,
                                     1280
                                 )
-                            } else retriever.getFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                else -> retriever.getFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                            }
+                            if (source == null) null else {
+                                val maxSide = maxOf(source.width, source.height)
+                                if (maxSide <= 1280) source else {
+                                    val ratio = 1280f / maxSide.toFloat()
+                                    val scaled = Bitmap.createScaledBitmap(
+                                        source,
+                                        (source.width * ratio).toInt().coerceAtLeast(1),
+                                        (source.height * ratio).toInt().coerceAtLeast(1),
+                                        true
+                                    )
+                                    source.recycle()
+                                    scaled
+                                }
+                            }
                         }.getOrNull()
                         if (frame != null) try {
                             val text = runCatching { recognizeText(frame, recognizer) }
@@ -495,19 +542,28 @@ object ConverterEngine {
         require(bytes.size > 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4b.toByte()) { "DOCX tidak valid: arsip ZIP tidak ditemukan." }
         var xml: String? = null
         ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
+            var totalUncompressed = 0L
+            var entryCount = 0
             while (true) {
                 val entry = zip.nextEntry ?: break
-                if (entry.name == "word/document.xml") {
-                    val out = ByteArrayOutputStream()
-                    val buffer = ByteArray(8192)
-                    var size = 0
-                    while (true) {
-                        val n = zip.read(buffer)
-                        if (n < 0) break
+                entryCount++
+                require(entryCount <= 5000) { "DOCX memiliki terlalu banyak entri arsip." }
+                val selected = entry.name == "word/document.xml"
+                val out = if (selected) ByteArrayOutputStream() else null
+                val buffer = ByteArray(8192)
+                var size = 0
+                while (true) {
+                    val n = zip.read(buffer)
+                    if (n < 0) break
+                    totalUncompressed += n
+                    require(totalUncompressed <= 128L * 1024 * 1024) { "Total data DOCX hasil ekstraksi melebihi batas aman 128 MB." }
+                    if (out != null) {
                         size += n
                         require(size <= 20 * 1024 * 1024) { "Konten XML DOCX terlalu besar." }
                         out.write(buffer, 0, n)
                     }
+                }
+                if (out != null) {
                     xml = out.toString("UTF-8")
                     break
                 }

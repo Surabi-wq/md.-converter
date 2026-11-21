@@ -13,6 +13,8 @@ import java.util.zip.ZipInputStream
 internal object ArchiveDocumentReader {
     private const val MAX_ENTRY_BYTES = 12 * 1024 * 1024
     private const val MAX_TOTAL_BYTES = 40 * 1024 * 1024
+    private const val MAX_ARCHIVE_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
+    private const val MAX_ARCHIVE_ENTRIES = 5000
     private const val MAX_ROWS_PER_SHEET = 5000
 
     fun convert(extension: String, bytes: ByteArray, warnings: MutableList<String>): String =
@@ -29,26 +31,35 @@ internal object ArchiveDocumentReader {
 
     private fun readEntries(bytes: ByteArray, keep: (String) -> Boolean): LinkedHashMap<String, String> {
         val result = linkedMapOf<String, String>()
-        var total = 0
+        var selectedTotal = 0
+        var archiveTotal = 0L
+        var entryCount = 0
         ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
+                entryCount++
+                require(entryCount <= MAX_ARCHIVE_ENTRIES) { "Arsip memiliki terlalu banyak entri; batasnya $MAX_ARCHIVE_ENTRIES." }
                 val name = entry.name
-                if (!entry.isDirectory && keep(name)) {
-                    val output = ByteArrayOutputStream()
-                    val buffer = ByteArray(8192)
-                    var entrySize = 0
-                    while (true) {
-                        val count = zip.read(buffer)
-                        if (count < 0) break
-                        entrySize += count
-                        total += count
+                val selected = !entry.isDirectory && keep(name)
+                val output = if (selected) ByteArrayOutputStream() else null
+                val buffer = ByteArray(8192)
+                var entrySize = 0
+                while (true) {
+                    val count = zip.read(buffer)
+                    if (count < 0) break
+                    entrySize += count
+                    archiveTotal += count
+                    require(archiveTotal <= MAX_ARCHIVE_UNCOMPRESSED_BYTES) {
+                        "Total data hasil ekstraksi arsip melebihi batas aman 128 MB."
+                    }
+                    if (output != null) {
+                        selectedTotal += count
                         require(entrySize <= MAX_ENTRY_BYTES) { "Konten arsip terlalu besar pada $name." }
-                        require(total <= MAX_TOTAL_BYTES) { "Total konten teks arsip melebihi batas aman 40 MB." }
+                        require(selectedTotal <= MAX_TOTAL_BYTES) { "Total konten teks arsip melebihi batas aman 40 MB." }
                         output.write(buffer, 0, count)
                     }
-                    result[name] = output.toString("UTF-8")
                 }
+                if (output != null) result[name] = output.toString("UTF-8")
                 zip.closeEntry()
             }
         }
@@ -68,7 +79,7 @@ internal object ArchiveDocumentReader {
         require(sheets.isNotEmpty()) { "XLSX tidak memiliki lembar kerja yang dapat dibaca." }
         warnings.add("XLSX: nilai sel yang tersimpan diekstrak. Rumus tidak dihitung ulang dan format visual tidak dipertahankan.")
         return sheets.entries.mapIndexed { index, entry ->
-            "## Lembar " + (index + 1) + "\n\n" + renderTable(xlsxRows(entry.value, strings))
+            "## Lembar " + (index + 1) + "\n\n" + renderTable(xlsxRows(entry.value, strings, warnings))
         }.joinToString("\n\n")
     }
 
@@ -99,9 +110,10 @@ internal object ArchiveDocumentReader {
         return result
     }
 
-    private fun xlsxRows(xml: String, shared: List<String>): List<List<String>> {
+    private fun xlsxRows(xml: String, shared: List<String>, warnings: MutableList<String>): List<List<String>> {
         val parser = parser(xml)
         val rows = mutableListOf<List<String>>()
+        var truncated = false
         var row = sortedMapOf<Int, String>()
         var inCell = false
         var cellType = ""
@@ -137,14 +149,17 @@ internal object ArchiveDocumentReader {
                         }
                         inCell = false
                     }
-                    "row" -> if (row.isNotEmpty() && rows.size < MAX_ROWS_PER_SHEET) {
-                        val width = row.lastKey() + 1
-                        rows.add((0 until width).map { row[it].orEmpty() })
+                    "row" -> if (row.isNotEmpty()) {
+                        if (rows.size < MAX_ROWS_PER_SHEET) {
+                            val width = row.lastKey() + 1
+                            rows.add((0 until width).map { row[it].orEmpty() })
+                        } else truncated = true
                     }
                 }
             }
             event = parser.next()
         }
+        if (truncated) warnings.add("XLSX: sebagian baris tidak ditampilkan karena batas 5.000 baris per lembar.")
         return rows
     }
 
@@ -164,6 +179,7 @@ internal object ArchiveDocumentReader {
         val sheets = mutableListOf<Pair<String, List<List<String>>>>()
         var sheetName = "Lembar"
         var rows = mutableListOf<List<String>>()
+        var truncatedRows = false
         var row = mutableListOf<String>()
         var cell = StringBuilder()
         var inCell = false
@@ -177,6 +193,7 @@ internal object ArchiveDocumentReader {
                         sheetName = attr(parser, "name", "urn:oasis:names:tc:opendocument:xmlns:table:1.0")
                             ?: "Lembar " + (sheets.size + 1)
                         rows = mutableListOf()
+                        truncatedRows = false
                     }
                     "table-row" -> row = mutableListOf()
                     "table-cell", "covered-table-cell" -> {
@@ -193,8 +210,14 @@ internal object ArchiveDocumentReader {
                         repeat(repeatColumns) { row.add(cell.toString().trim()) }
                         inCell = false
                     }
-                    "table-row" -> if (row.isNotEmpty() && rows.size < MAX_ROWS_PER_SHEET) rows.add(row.toList())
-                    "table" -> if (rows.isNotEmpty()) sheets.add(sheetName to rows)
+                    "table-row" -> if (row.isNotEmpty()) {
+                        if (rows.size < MAX_ROWS_PER_SHEET) rows.add(row.toList())
+                        else truncatedRows = true
+                    }
+                    "table" -> if (rows.isNotEmpty()) {
+                        sheets.add(sheetName to rows)
+                        if (truncatedRows) warnings.add("ODS: sebagian baris pada '$sheetName' tidak ditampilkan karena batas 5.000 baris per lembar.")
+                    }
                 }
             }
             event = parser.next()
@@ -259,6 +282,7 @@ internal object ArchiveDocumentReader {
         }
         require(entries.isNotEmpty()) { "EPUB tidak memiliki bab HTML/XHTML yang dapat dibaca." }
         warnings.add("EPUB: bab teks diekstrak berdasarkan urutan nama file. Urutan bacaan berdasarkan spine EPUB dapat berbeda pada sebagian buku.")
+        if (entries.size > 300) warnings.add("EPUB: hanya 300 bab pertama yang diekstrak.")
         return entries.entries.take(300).mapIndexed { index, entry ->
             val title = entry.key.substringAfterLast('/').substringBeforeLast('.').replace('-', ' ').replace('_', ' ')
             "## " + title.ifBlank { "Bab " + (index + 1) } + "\n\n" + htmlText(entry.value)

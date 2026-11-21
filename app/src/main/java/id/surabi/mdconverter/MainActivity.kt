@@ -1,6 +1,7 @@
 package id.surabi.mdconverter
 
 import android.net.Uri
+import android.content.Intent
 import android.provider.DocumentsContract
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import android.os.Bundle
@@ -29,6 +30,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -42,10 +44,28 @@ data class ConvertedFile(
 )
 
 class MainActivity : ComponentActivity() {
+    @Volatile private var cancelAfterCurrentFile = false
+    private var incomingSharedUris: List<Uri> = emptyList()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        incomingSharedUris = extractSharedUris(intent)
         PDFBoxResourceLoader.init(applicationContext)
         setContent { Screen() }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun extractSharedUris(source: Intent?): List<Uri> {
+        if (source == null) return emptyList()
+        val shared = when (source.action) {
+            Intent.ACTION_SEND -> listOfNotNull(source.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+            Intent.ACTION_SEND_MULTIPLE -> source.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+            else -> emptyList()
+        }
+        val clipItems = source.clipData?.let { clip ->
+            (0 until clip.itemCount).mapNotNull { index -> clip.getItemAt(index).uri }
+        }.orEmpty()
+        return (shared + clipItems + listOfNotNull(source.data)).distinct()
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -53,20 +73,30 @@ class MainActivity : ComponentActivity() {
     private fun Screen() {
         val files = remember { mutableStateListOf<ConvertedFile>() }
         var busy by remember { mutableStateOf(false) }
-        var message by remember { mutableStateOf("Pilih dokumen atau media untuk mulai.") }
+        var message by remember {
+            mutableStateOf(
+                if (incomingSharedUris.isEmpty()) "Pilih dokumen atau media untuk mulai."
+                else incomingSharedUris.size.toString() + " file diterima dari aplikasi lain. Periksa antrean lalu mulai konversi."
+            )
+        }
+        var progress by remember { mutableFloatStateOf(0f) }
         var preview by remember { mutableStateOf<ConvertedFile?>(null) }
         var showHelp by remember { mutableStateOf(false) }
         var pendingMarkdown by remember { mutableStateOf<String?>(null) }
         var pendingName by remember { mutableStateOf("hasil.md") }
-        val selectedUris = remember { mutableStateListOf<Uri>() }
+        val selectedUris = remember { mutableStateListOf<Uri>().apply { addAll(incomingSharedUris) } }
         var outputFolder by remember { mutableStateOf(loadOutputFolder()) }
         val successfulCount = files.count { it.error == null }
-        val combined = remember(files.toList()) { files.filter { it.error == null }.takeIf { it.isNotEmpty() }?.let(::combineMarkdown).orEmpty() }
 
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
             if (uris.isNotEmpty() && !busy) {
                 val existing = selectedUris.map { it.toString() }.toHashSet()
                 val fresh = uris.filter { existing.add(it.toString()) }
+                fresh.forEach { uri ->
+                    runCatching {
+                        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                }
                 selectedUris.addAll(fresh)
                 message = if (fresh.isEmpty()) "File yang dipilih sudah ada di antrean." else "${fresh.size} file ditambahkan. Total ${selectedUris.size} file menunggu konfirmasi."
             }
@@ -160,11 +190,12 @@ class MainActivity : ComponentActivity() {
                                 if (selectedUris.isNotEmpty()) {
                                     Text("File terpilih (${selectedUris.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF315F55))
                                     selectedUris.take(4).forEach { uri ->
+                                        val displayName = remember(uri) { runCatching { queryName(uri) }.getOrDefault("Dokumen terpilih") }
                                         Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFFF1F5F2)) {
                                             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                                                 Icon(Icons.Default.InsertDriveFile, null, tint = Color(0xFF315F55), modifier = Modifier.size(20.dp))
                                                 Spacer(Modifier.width(8.dp))
-                                                Text(uri.lastPathSegment?.substringAfterLast('/')?.take(48) ?: "Dokumen terpilih", fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                                Text(displayName.take(48), fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                                                 IconButton(onClick = { selectedUris.remove(uri) }, enabled = !busy) {
                                                     Icon(Icons.Default.Close, "Hapus dari antrean", tint = Color.Gray, modifier = Modifier.size(18.dp))
                                                 }
@@ -174,12 +205,29 @@ class MainActivity : ComponentActivity() {
                                     if (selectedUris.size > 4) Text("+ ${selectedUris.size - 4} file lainnya", fontSize = 11.sp, color = Color(0xFF49635D))
                                 }
                                 Button(onClick = {
-                                    files.clear()
                                     val batch = selectedUris.toList()
                                     selectedUris.clear()
-                                    processFiles(batch, files, outputFolder) { isBusy, status -> busy = isBusy; message = status }
+                                    progress = 0f
+                                    cancelAfterCurrentFile = false
+                                    processFiles(batch, files, outputFolder) { isBusy, status, fraction ->
+                                        busy = isBusy
+                                        message = status
+                                        progress = fraction
+                                    }
                                 }, enabled = !busy && selectedUris.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
                                     Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("2. Konfirmasi & mulai konversi")
+                                }
+                                if (busy) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            cancelAfterCurrentFile = true
+                                            message = "Permintaan pembatalan diterima. File yang sedang aktif akan dituntaskan terlebih dahulu."
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Default.Close, null); Spacer(Modifier.width(8.dp))
+                                        Text("Batalkan setelah file aktif selesai")
+                                    }
                                 }
                                 OutlinedButton(onClick = { folderPicker.launch(outputFolder) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                                     Icon(Icons.Default.Folder, null); Spacer(Modifier.width(8.dp)); Text(if (outputFolder == null) "Pilih folder keluaran" else "Ganti folder keluaran")
@@ -204,6 +252,11 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.weight(1f)) {
                                 Text("Hasil konversi", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                                 Text("${files.size} file diproses", color = Color.Gray, fontSize = 12.sp)
+                            }
+                            if (files.isNotEmpty()) {
+                                TextButton(onClick = { files.clear(); message = "Daftar hasil dibersihkan." }, enabled = !busy) {
+                                    Text("Hapus hasil")
+                                }
                             }
                             AssistChip(
                                 onClick = {},
@@ -239,20 +292,21 @@ class MainActivity : ComponentActivity() {
                                         val successful = files.filter { it.error == null }
                                         val documentName = MarkdownFileNames.merged(successful.map { it.name })
                                         val folder = outputFolder
-                                        if (folder == null) {
-                                            pendingMarkdown = combined
-                                            pendingName = documentName
-                                            saver.launch(documentName)
-                                        } else {
-                                            lifecycleScope.launch {
-                                                try {
+                                        lifecycleScope.launch {
+                                            try {
+                                                val merged = withContext(Dispatchers.Default) { combineMarkdown(successful) }
+                                                if (folder == null) {
+                                                    pendingMarkdown = merged
+                                                    pendingName = documentName
+                                                    saver.launch(documentName)
+                                                } else {
                                                     val savedName = withContext(Dispatchers.IO) {
-                                                        saveToFolder(folder, documentName, combined)
+                                                        saveToFolder(folder, documentName, merged)
                                                     }
                                                     message = "Dokumen gabungan berhasil disimpan sebagai " + savedName
-                                                } catch (e: Exception) {
-                                                    message = "Gagal menyimpan dokumen gabungan: " + (e.message ?: "kesalahan penyimpanan")
                                                 }
+                                            } catch (e: Exception) {
+                                                message = "Gagal membuat dokumen gabungan: " + (e.message ?: "kesalahan penyimpanan")
                                             }
                                         }
                                     },
@@ -266,14 +320,21 @@ class MainActivity : ComponentActivity() {
                                 OutlinedButton(
                                     onClick = {
                                         val successful = files.filter { it.error == null }
-                                        preview = ConvertedFile(
-                                            -1L,
-                                            MarkdownFileNames.merged(successful.map { it.name }),
-                                            "md",
-                                            combined,
-                                            emptyList(),
-                                            null
-                                        )
+                                        lifecycleScope.launch {
+                                            try {
+                                                val merged = withContext(Dispatchers.Default) { combineMarkdown(successful) }
+                                                preview = ConvertedFile(
+                                                    -1L,
+                                                    MarkdownFileNames.merged(successful.map { it.name }),
+                                                    "md",
+                                                    merged,
+                                                    emptyList(),
+                                                    null
+                                                )
+                                            } catch (e: Exception) {
+                                                message = "Gagal membuat pratinjau gabungan: " + (e.message ?: "kesalahan tidak diketahui")
+                                            }
+                                        }
                                     },
                                     enabled = !busy && successfulCount >= 2,
                                     modifier = Modifier.fillMaxWidth()
@@ -345,7 +406,10 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                                 Text("Status", fontWeight = FontWeight.Bold)
                                 Text(message, color = Color.Gray, fontSize = 13.sp)
-                                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                                if (busy) {
+                                    LinearProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                                    Text((progress * 100).toInt().toString() + "% selesai", fontSize = 11.sp, color = Color.Gray)
+                                }
                             }
                         }
                     }
@@ -430,13 +494,18 @@ class MainActivity : ComponentActivity() {
         uris: List<Uri>,
         files: MutableList<ConvertedFile>,
         outputFolder: Uri?,
-        onStatus: (Boolean, String) -> Unit
-    ) {
-        lifecycleScope.launch {
-            onStatus(true, "Memproses " + uris.size + " file secara berurutan…")
+        onStatus: (Boolean, String, Float) -> Unit
+    ): Job = lifecycleScope.launch {
+            onStatus(true, "Memproses " + uris.size + " file secara berurutan…", 0f)
             var completed = 0
+            var wasCancelled = false
+            val batchResults = mutableListOf<ConvertedFile>()
             try {
                 for (uri in uris) {
+                    if (cancelAfterCurrentFile) {
+                        wasCancelled = true
+                        break
+                    }
                     val converted = withContext(Dispatchers.IO) {
                         val name = runCatching { queryName(uri) }.getOrDefault("dokumen")
                         try {
@@ -463,11 +532,16 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     files.add(converted)
+                    batchResults.add(converted)
                     completed++
-                    onStatus(true, "Memproses file " + completed + " dari " + uris.size + "…")
+                    onStatus(true, "Memproses file " + completed + " dari " + uris.size + "…", completed.toFloat() / uris.size.coerceAtLeast(1))
+                    if (cancelAfterCurrentFile) {
+                        wasCancelled = true
+                        break
+                    }
                 }
 
-                val successful = files.filter { it.error == null }
+                val successful = batchResults.filter { it.error == null }
                 if (successful.isNotEmpty() && outputFolder != null) {
                     var savedCount = 0
                     val saveErrors = mutableListOf<String>()
@@ -483,20 +557,22 @@ class MainActivity : ComponentActivity() {
                     }
                     val status = "Konversi selesai: " + completed + " file diperiksa; " + savedCount +
                         " hasil tersimpan dengan nama sumber + .md. Untuk menyatukan hasil, gunakan tombol 3."
-                    onStatus(false, if (saveErrors.isEmpty()) status else status + " Gagal menyimpan: " + saveErrors.joinToString("; "))
+                    val completedStatus = if (wasCancelled) "Proses dibatalkan setelah $completed file aktif selesai; hasil batch yang selesai tetap dipertahankan." else status
+                    onStatus(false, if (saveErrors.isEmpty()) completedStatus else completedStatus + " Gagal menyimpan: " + saveErrors.joinToString("; "), completed.toFloat() / uris.size.coerceAtLeast(1))
                 } else if (successful.isNotEmpty()) {
-                    onStatus(false, "Konversi selesai: " + completed + " file diperiksa. Pilih folder keluaran untuk simpan otomatis atau ekspor tiap hasil. Gunakan tombol 3 untuk menggabungkan.")
+                    val completedStatus = if (wasCancelled) "Proses dibatalkan setelah $completed file aktif selesai; hasil batch tetap dipertahankan." else "Konversi selesai: " + completed + " file diperiksa. Pilih folder keluaran untuk simpan otomatis atau ekspor tiap hasil. Gunakan tombol 3 untuk menggabungkan."
+                    onStatus(false, completedStatus, completed.toFloat() / uris.size.coerceAtLeast(1))
                 } else {
-                    onStatus(false, "Tidak ada file yang berhasil dikonversi.")
+                    val emptyStatus = if (wasCancelled) "Proses dibatalkan sebelum file berikutnya dimulai." else "Tidak ada file yang berhasil dikonversi."
+                    onStatus(false, emptyStatus, completed.toFloat() / uris.size.coerceAtLeast(1))
                 }
             } catch (e: CancellationException) {
-                onStatus(false, "Proses dibatalkan setelah " + completed + " file.")
+                onStatus(false, "Proses dibatalkan setelah " + completed + " file aktif selesai.", completed.toFloat() / uris.size.coerceAtLeast(1))
                 throw e
             } catch (e: Exception) {
-                onStatus(false, "Proses terhenti: " + (e.message ?: "kesalahan tidak diketahui"))
+                onStatus(false, "Proses terhenti: " + (e.message ?: "kesalahan tidak diketahui"), completed.toFloat() / uris.size.coerceAtLeast(1))
             }
         }
-    }
 
     private fun loadOutputFolder(): Uri? {
         val saved = getSharedPreferences("settings", MODE_PRIVATE).getString("output_tree", null) ?: return null
