@@ -1,10 +1,8 @@
 package id.surabi.mdconverter
 
 import android.net.Uri
-import android.provider.DocumentsContract
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import android.os.Bundle
-import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -27,7 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.CancellationException
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -38,8 +36,16 @@ data class ConvertedFile(
     val format: String,
     val markdown: String,
     val warnings: List<String>,
-    val error: String?
-)
+    val error: String?,
+    val cacheFilePath: String? = null
+) {
+    fun readMarkdown(): String =
+        cacheFilePath?.let { java.io.File(it).readText(Charsets.UTF_8) } ?: markdown
+
+    fun deleteCachedContent() {
+        cacheFilePath?.let { java.io.File(it).delete() }
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,17 +57,19 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     private fun Screen() {
-        val files = remember { mutableStateListOf<ConvertedFile>() }
-        var busy by remember { mutableStateOf(false) }
-        var message by remember { mutableStateOf("Pilih dokumen atau media untuk mulai.") }
+        val conversionViewModel: ConversionViewModel = viewModel()
+        val files = conversionViewModel.files
+        val busy = conversionViewModel.busy
+        var message by remember { mutableStateOf(conversionViewModel.message) }
+        LaunchedEffect(conversionViewModel.message) { message = conversionViewModel.message }
         var preview by remember { mutableStateOf<ConvertedFile?>(null) }
         var showHelp by remember { mutableStateOf(false) }
         var pendingMarkdown by remember { mutableStateOf<String?>(null) }
         var pendingName by remember { mutableStateOf("hasil.md") }
-        val selectedUris = remember { mutableStateListOf<Uri>() }
-        var outputFolder by remember { mutableStateOf(loadOutputFolder()) }
+        val selectedUris = conversionViewModel.selectedUris
+        var outputFolder by remember { mutableStateOf(DocumentStorage.loadOutputFolder(this@MainActivity)) }
+        val mergeScope = rememberCoroutineScope()
         val successfulCount = files.count { it.error == null }
-        val combined = remember(files.toList()) { files.filter { it.error == null }.takeIf { it.isNotEmpty() }?.let(::combineMarkdown).orEmpty() }
 
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
             if (uris.isNotEmpty() && !busy) {
@@ -164,7 +172,7 @@ class MainActivity : ComponentActivity() {
                                             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                                                 Icon(Icons.Default.InsertDriveFile, null, tint = Color(0xFF315F55), modifier = Modifier.size(20.dp))
                                                 Spacer(Modifier.width(8.dp))
-                                                Text(uri.lastPathSegment?.substringAfterLast('/')?.take(48) ?: "Dokumen terpilih", fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                                Text(DocumentStorage.queryName(this@MainActivity, uri).take(48), fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                                                 IconButton(onClick = { selectedUris.remove(uri) }, enabled = !busy) {
                                                     Icon(Icons.Default.Close, "Hapus dari antrean", tint = Color.Gray, modifier = Modifier.size(18.dp))
                                                 }
@@ -174,10 +182,9 @@ class MainActivity : ComponentActivity() {
                                     if (selectedUris.size > 4) Text("+ ${selectedUris.size - 4} file lainnya", fontSize = 11.sp, color = Color(0xFF49635D))
                                 }
                                 Button(onClick = {
-                                    files.clear()
                                     val batch = selectedUris.toList()
                                     selectedUris.clear()
-                                    processFiles(batch, files, outputFolder) { isBusy, status -> busy = isBusy; message = status }
+                                    conversionViewModel.start(applicationContext, batch, outputFolder)
                                 }, enabled = !busy && selectedUris.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
                                     Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("2. Konfirmasi & mulai konversi")
                                 }
@@ -214,6 +221,11 @@ class MainActivity : ComponentActivity() {
                             if (files.any { it.error != null }) {
                                 AssistChip(onClick = {}, label = { Text("${files.count { it.error != null }} gagal") }, enabled = false)
                             }
+                            if (files.isNotEmpty()) {
+                                TextButton(onClick = { conversionViewModel.clearResults() }, enabled = !busy) {
+                                    Text("Hapus hasil")
+                                }
+                            }
                         }
                     }
 
@@ -239,15 +251,16 @@ class MainActivity : ComponentActivity() {
                                         val successful = files.filter { it.error == null }
                                         val documentName = MarkdownFileNames.merged(successful.map { it.name })
                                         val folder = outputFolder
-                                        if (folder == null) {
-                                            pendingMarkdown = combined
-                                            pendingName = documentName
-                                            saver.launch(documentName)
-                                        } else {
-                                            lifecycleScope.launch {
+                                        mergeScope.launch {
+                                            val markdown = withContext(Dispatchers.Default) { combineMarkdown(successful) }
+                                            if (folder == null) {
+                                                pendingMarkdown = markdown
+                                                pendingName = documentName
+                                                saver.launch(documentName)
+                                            } else {
                                                 try {
                                                     val savedName = withContext(Dispatchers.IO) {
-                                                        saveToFolder(folder, documentName, combined)
+                                                        DocumentStorage.saveToFolder(this@MainActivity, folder, documentName, markdown)
                                                     }
                                                     message = "Dokumen gabungan berhasil disimpan sebagai " + savedName
                                                 } catch (e: Exception) {
@@ -266,14 +279,17 @@ class MainActivity : ComponentActivity() {
                                 OutlinedButton(
                                     onClick = {
                                         val successful = files.filter { it.error == null }
-                                        preview = ConvertedFile(
-                                            -1L,
-                                            MarkdownFileNames.merged(successful.map { it.name }),
-                                            "md",
-                                            combined,
-                                            emptyList(),
-                                            null
-                                        )
+                                        mergeScope.launch {
+                                            val markdown = withContext(Dispatchers.Default) { combineMarkdown(successful) }
+                                            preview = ConvertedFile(
+                                                -1L,
+                                                MarkdownFileNames.merged(successful.map { it.name }),
+                                                "md",
+                                                markdown,
+                                                emptyList(),
+                                                null
+                                            )
+                                        }
                                     },
                                     enabled = !busy && successfulCount >= 2,
                                     modifier = Modifier.fillMaxWidth()
@@ -321,7 +337,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                     IconButton(
                                         onClick = {
-                                            pendingMarkdown = file.markdown
+                                            pendingMarkdown = file.readMarkdown()
                                             pendingName = MarkdownFileNames.fromSource(file.name)
                                             saver.launch(pendingName)
                                         },
@@ -332,7 +348,7 @@ class MainActivity : ComponentActivity() {
                                 if (file.error != null) Text(file.error, color = Color.Red, fontSize = 12.sp)
                                 if (file.error == null) {
                                     OutlinedButton(
-                                        onClick = { preview = file },
+                                        onClick = { preview = file.copy(markdown = file.readMarkdown(), cacheFilePath = null) },
                                         modifier = Modifier.fillMaxWidth()
                                     ) { Text("Lihat Markdown") }
                                 }
@@ -345,7 +361,25 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                                 Text("Status", fontWeight = FontWeight.Bold)
                                 Text(message, color = Color.Gray, fontSize = 13.sp)
-                                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                                if (busy) {
+                                    LinearProgressIndicator(
+                                        progress = { conversionViewModel.progress },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    Text(
+                                        "${conversionViewModel.completed} dari ${conversionViewModel.total} file selesai",
+                                        color = Color.Gray,
+                                        fontSize = 11.sp
+                                    )
+                                    OutlinedButton(
+                                        onClick = { conversionViewModel.cancel() },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Default.Close, null)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Batalkan konversi")
+                                    }
+                                }
                             }
                         }
                     }
@@ -390,7 +424,7 @@ class MainActivity : ComponentActivity() {
                             }
                             HorizontalDivider()
                             Text("Batasan penting", fontWeight = FontWeight.Bold, color = Color(0xFF315F55))
-                            Text("Format DOC, XLS, dan PPT lama belum didukung. PDF hasil scan belum menjalani OCR. Audio belum ditranskripsikan menjadi ucapan/lirik; OCR video hanya membaca teks pada cuplikan, bukan dialog.", fontSize = 12.sp)
+                            Text("Format DOC, XLS, dan PPT lama belum didukung. PDF hasil scan dapat menjalani OCR pada maksimal 50 halaman. Audio belum ditranskripsikan menjadi ucapan/lirik; OCR video hanya membaca teks pada cuplikan, bukan dialog.", fontSize = 12.sp)
                             Text(UsageGuide.privacy, fontSize = 12.sp, color = Color.Gray)
                         }
                     },
@@ -426,136 +460,4 @@ class MainActivity : ComponentActivity() {
 
     private fun combineMarkdown(items: List<ConvertedFile>): String = MarkdownMerger.combine(items)
 
-    private fun processFiles(
-        uris: List<Uri>,
-        files: MutableList<ConvertedFile>,
-        outputFolder: Uri?,
-        onStatus: (Boolean, String) -> Unit
-    ) {
-        lifecycleScope.launch {
-            onStatus(true, "Memproses " + uris.size + " file secara berurutan…")
-            var completed = 0
-            try {
-                for (uri in uris) {
-                    val converted = withContext(Dispatchers.IO) {
-                        val name = runCatching { queryName(uri) }.getOrDefault("dokumen")
-                        try {
-                            val result = ConverterEngine.convert(this@MainActivity, uri, name)
-                            ConvertedFile(
-                                System.nanoTime(),
-                                name,
-                                result.format,
-                                result.markdown,
-                                result.warnings,
-                                null
-                            )
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            ConvertedFile(
-                                System.nanoTime(),
-                                name,
-                                name.substringAfterLast('.', "unknown"),
-                                "",
-                                emptyList(),
-                                e.message ?: "Konversi gagal."
-                            )
-                        }
-                    }
-                    files.add(converted)
-                    completed++
-                    onStatus(true, "Memproses file " + completed + " dari " + uris.size + "…")
-                }
-
-                val successful = files.filter { it.error == null }
-                if (successful.isNotEmpty() && outputFolder != null) {
-                    var savedCount = 0
-                    val saveErrors = mutableListOf<String>()
-                    withContext(Dispatchers.IO) {
-                        successful.forEach { item ->
-                            try {
-                                saveToFolder(outputFolder, MarkdownFileNames.fromSource(item.name), item.markdown)
-                                savedCount++
-                            } catch (e: Exception) {
-                                saveErrors.add(item.name + ": " + (e.message ?: "gagal disimpan"))
-                            }
-                        }
-                    }
-                    val status = "Konversi selesai: " + completed + " file diperiksa; " + savedCount +
-                        " hasil tersimpan dengan nama sumber + .md. Untuk menyatukan hasil, gunakan tombol 3."
-                    onStatus(false, if (saveErrors.isEmpty()) status else status + " Gagal menyimpan: " + saveErrors.joinToString("; "))
-                } else if (successful.isNotEmpty()) {
-                    onStatus(false, "Konversi selesai: " + completed + " file diperiksa. Pilih folder keluaran untuk simpan otomatis atau ekspor tiap hasil. Gunakan tombol 3 untuk menggabungkan.")
-                } else {
-                    onStatus(false, "Tidak ada file yang berhasil dikonversi.")
-                }
-            } catch (e: CancellationException) {
-                onStatus(false, "Proses dibatalkan setelah " + completed + " file.")
-                throw e
-            } catch (e: Exception) {
-                onStatus(false, "Proses terhenti: " + (e.message ?: "kesalahan tidak diketahui"))
-            }
-        }
     }
-
-    private fun loadOutputFolder(): Uri? {
-        val saved = getSharedPreferences("settings", MODE_PRIVATE).getString("output_tree", null) ?: return null
-        val uri = runCatching { Uri.parse(saved) }.getOrNull() ?: return null
-        val granted = contentResolver.persistedUriPermissions.any { it.uri == uri && it.isWritePermission }
-        if (!granted) getSharedPreferences("settings", MODE_PRIVATE).edit().remove("output_tree").apply()
-        return uri.takeIf { granted }
-    }
-
-    private fun saveToFolder(tree: Uri, name: String, markdown: String): String {
-        val rootId = DocumentsContract.getTreeDocumentId(tree)
-        val root = DocumentsContract.buildDocumentUriUsingTree(tree, rootId)
-        val finalName = uniqueDocumentName(tree, rootId, name)
-        val output = DocumentsContract.createDocument(contentResolver, root, "text/markdown", finalName)
-            ?: error("Tidak dapat membuat file pada folder tujuan.")
-        try {
-            (contentResolver.openOutputStream(output, "wt")
-                ?: error("Tidak dapat membuka file keluaran."))
-                .bufferedWriter(Charsets.UTF_8).use { it.write(markdown) }
-            return finalName
-        } catch (e: Exception) {
-            runCatching { DocumentsContract.deleteDocument(contentResolver, output) }
-            throw e
-        }
-    }
-
-    private fun uniqueDocumentName(tree: Uri, rootId: String, requested: String): String {
-        val childUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, rootId)
-        val existing = runCatching {
-            contentResolver.query(
-                childUri,
-                arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-                null,
-                null,
-                null
-            )?.use { cursor ->
-                buildSet {
-                    val index = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                    while (cursor.moveToNext() && index >= 0) add(cursor.getString(index))
-                }
-            }.orEmpty()
-        }.getOrDefault(emptySet())
-        if (requested !in existing) return requested
-
-        val dot = requested.lastIndexOf('.')
-        val base = if (dot > 0) requested.substring(0, dot) else requested
-        val extension = if (dot > 0) requested.substring(dot) else ""
-        var index = 2
-        while (base + " (" + index + ")" + extension in existing) index++
-        return base + " (" + index + ")" + extension
-    }
-
-    private fun queryName(uri: Uri): String {
-        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (cursor.moveToFirst() && index >= 0) {
-                return cursor.getString(index)?.takeIf { it.isNotBlank() } ?: "dokumen"
-            }
-        }
-        return uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "dokumen"
-    }
-}
