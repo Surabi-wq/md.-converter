@@ -27,7 +27,7 @@ class MediaSignaturesTest {
     @Test
     fun rejectsInvalidMpegLayerAndReservedSampleRate() {
         val invalidLayer = byteArrayOf(0xFF.toByte(), 0xF9.toByte(), 0x90.toByte())
-        val reservedSampleRate = byteArrayOf(0xFF.toByte(), 0xFB.toByte(), 0x93.toByte())
+        val reservedSampleRate = byteArrayOf(0xFF.toByte(), 0xFB.toByte(), 0x9F.toByte())
 
         assertFalse(MediaSignatures.isMpegAudioFrame(invalidLayer))
         assertFalse(MediaSignatures.isMpegAudioFrame(reservedSampleRate))
