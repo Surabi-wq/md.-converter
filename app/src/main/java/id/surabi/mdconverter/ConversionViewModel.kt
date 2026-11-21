@@ -53,9 +53,10 @@ internal class ConversionViewModel : ViewModel() {
             val activeFiles = files.mapNotNull { it.cacheFilePath }.toSet()
             withContext(Dispatchers.IO) { removeOrphanedFiles(appContext, activeFiles) }
             enforceHistoryLimits()
-            persistHistory(appContext)
+            runCatching { persistHistory(appContext) }
+                .onFailure { message = "Riwayat lokal dibaca, tetapi indeksnya belum dapat diperbarui." }
             historyReady = true
-            if (restored.isNotEmpty()) {
+            if (restored.isNotEmpty() && message == "Pilih dokumen atau media untuk mulai.") {
                 message = "Riwayat lokal dipulihkan: ${restored.size} hasil. Hasil disimpan di perangkat ini."
             }
         }
@@ -82,7 +83,7 @@ internal class ConversionViewModel : ViewModel() {
             try {
                 for ((index, uri) in uris.withIndex()) {
                     if (cancelRequested) {
-                        selectedUris.addAll(uris.drop(index))
+                        restorePendingUris(uris.drop(index))
                         wasCancelled = true
                         break
                     }
@@ -153,7 +154,7 @@ internal class ConversionViewModel : ViewModel() {
                     persistHistory(appContext)
 
                     if (cancelRequested) {
-                        if (index + 1 < uris.size) selectedUris.addAll(uris.drop(index + 1))
+                        if (index + 1 < uris.size) restorePendingUris(uris.drop(index + 1))
                         wasCancelled = true
                         break
                     }
@@ -175,7 +176,7 @@ internal class ConversionViewModel : ViewModel() {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                if (nextIndex < uris.size) selectedUris.addAll(uris.drop(nextIndex))
+                if (nextIndex < uris.size) restorePendingUris(uris.drop(nextIndex))
                 message = "Proses terhenti: " + (error.message ?: "kesalahan tidak diketahui") +
                     " File yang belum diproses dikembalikan ke antrean."
             } finally {
@@ -183,6 +184,11 @@ internal class ConversionViewModel : ViewModel() {
                 cancelRequested = false
             }
         }
+    }
+
+    private fun restorePendingUris(uris: List<Uri>) {
+        val existing = selectedUris.map { it.toString() }.toHashSet()
+        selectedUris.addAll(uris.filter { existing.add(it.toString()) })
     }
 
     /** Requests cancellation at a safe boundary; the currently active file is allowed to finish. */
@@ -202,9 +208,17 @@ internal class ConversionViewModel : ViewModel() {
         message = "Daftar hasil konversi dikosongkan."
         historyReady = false
         viewModelScope.launch(Dispatchers.IO) {
-            removed.forEach { it.deleteCachedContent() }
-            writeHistoryIndex(context.applicationContext, emptyList())
-            withContext(Dispatchers.Main) { historyReady = true }
+            try {
+                removed.forEach { it.deleteCachedContent() }
+                writeHistoryIndex(context.applicationContext, emptyList())
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main) {
+                    message = "Daftar ditampilkan kosong, tetapi indeks riwayat gagal diperbarui: " +
+                        (error.message ?: "kesalahan penyimpanan")
+                }
+            } finally {
+                withContext(Dispatchers.Main) { historyReady = true }
+            }
         }
     }
 
