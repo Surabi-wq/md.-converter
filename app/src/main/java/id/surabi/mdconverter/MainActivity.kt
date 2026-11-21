@@ -43,6 +43,48 @@ data class ConvertedFile(
     fun readMarkdown(): String =
         cacheFilePath?.let { java.io.File(it).readText(Charsets.UTF_8) } ?: markdown
 
+    fun writeMarkdownTo(writer: java.io.Writer) {
+        val path = cacheFilePath
+        if (path == null) writer.write(markdown)
+        else java.io.File(path).bufferedReader(Charsets.UTF_8).use { reader ->
+            val buffer = CharArray(16 * 1024)
+            while (true) {
+                val count = reader.read(buffer)
+                if (count < 0) break
+                writer.write(buffer, 0, count)
+            }
+        }
+    }
+
+    fun writeBodyTo(writer: java.io.Writer) {
+        val path = cacheFilePath
+        if (path == null) {
+            val body = markdown.substringAfter("\n\n", markdown).trim()
+            writer.write(body.ifBlank { "_Tidak ada konten teks yang dapat ditampilkan._" })
+            return
+        }
+
+        java.io.File(path).bufferedReader(Charsets.UTF_8).use { reader ->
+            reader.readLine() // Drop the source-title heading; merger supplies its own section heading.
+            var line: String?
+            do {
+                line = reader.readLine()
+            } while (line != null && line.isBlank())
+            var pendingBlankLines = 0
+            while (line != null) {
+                if (line.isBlank()) {
+                    pendingBlankLines++
+                } else {
+                    repeat(pendingBlankLines) { writer.write("\n") }
+                    pendingBlankLines = 0
+                    writer.write(line)
+                    writer.write("\n")
+                }
+                line = reader.readLine()
+            }
+        }
+    }
+
     fun deleteCachedContent() {
         cacheFilePath?.let { java.io.File(it).delete() }
     }
