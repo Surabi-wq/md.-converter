@@ -220,10 +220,10 @@ object ConverterEngine {
         val retriever = MediaMetadataRetriever()
         try {
             val descriptor = context.contentResolver.openAssetFileDescriptor(uri, "r")
-            try {
-                if (descriptor != null && descriptor.length >= 0) retriever.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
-                else retriever.setDataSource(context, uri)
+            val configured = try {
+                descriptor != null && descriptor.length >= 0 && runCatching { retriever.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length) }.isSuccess
             } finally { descriptor?.close() }
+            if (!configured) retriever.setDataSource(context, uri)
             fun meta(key: Int): String? = retriever.extractMetadata(key)?.takeIf { it.isNotBlank() }
             val duration = meta(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
             val out = StringBuilder()
