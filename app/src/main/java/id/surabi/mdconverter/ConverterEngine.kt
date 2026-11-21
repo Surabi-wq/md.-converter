@@ -32,13 +32,14 @@ object ConverterEngine {
     private val codeTypes = setOf("py","js","ts","jsx","tsx","java","kt","kts","c","h","cpp","hpp","cs","php","go","rs","swift","css","scss","sass","sh","bash","bat","ps1","sql","rb","r","lua","dart","scala")
 
     fun convert(context: Context, uri: Uri, name: String): ConversionResult {
-        val ext = name.substringAfterLast('.', "").lowercase()
+        val mime = context.contentResolver.getType(uri)?.lowercase().orEmpty()
+        val ext = resolveExtension(name, mime, context, uri)
         val warnings = mutableListOf<String>()
         val title = name.substringBeforeLast('.', name).replace("\\", "\\\\").replace("#", "\\#")
 
         // Metadata extraction reads the SAF URI directly; large media is never copied into RAM.
-        if (ext in audioTypes || ext in videoTypes) {
-            val body = mediaToMarkdown(context, uri, name, ext in videoTypes, warnings)
+        if (ext in audioTypes || ext in videoTypes || mime.startsWith("audio/") || mime.startsWith("video/")) {
+            val body = mediaToMarkdown(context, uri, name, ext in videoTypes || mime.startsWith("video/"), warnings)
             return ConversionResult("# $title\n\n$body\n", ext, warnings.distinct())
         }
 
@@ -61,7 +62,7 @@ object ConverterEngine {
         val body = when {
             ext == "pdf" -> pdf(bytes, warnings)
             ext == "docx" -> docx(bytes, warnings)
-            ext in imageTypes -> imageToMarkdown(bytes, ext, warnings)
+            ext in imageTypes || mime.startsWith("image/") -> imageToMarkdown(bytes, ext.ifBlank { mime.substringAfter("/", "image") }, warnings)
             ext in setOf("txt","md","markdown","log") -> text.trimEnd()
             ext in codeTypes -> fenced(ext, text)
             ext == "csv" || ext == "tsv" -> table(text, if (ext == "tsv") '\t' else ',')
@@ -76,6 +77,23 @@ object ConverterEngine {
         return ConversionResult("# $title\n\n$body\n", ext.ifBlank { "unknown" }, warnings.distinct())
     }
 
+    private fun resolveExtension(name: String, mime: String, context: Context, uri: Uri): String {
+        val fromName = name.substringAfterLast('.', "").lowercase()
+        if (fromName.isNotBlank()) return fromName
+        val byMime = mapOf("image/jpeg" to "jpg", "image/png" to "png", "image/webp" to "webp", "image/gif" to "gif", "image/heic" to "heic", "image/heif" to "heif", "audio/mpeg" to "mp3", "audio/mp4" to "m4a", "audio/aac" to "aac", "audio/wav" to "wav", "audio/x-wav" to "wav", "audio/ogg" to "ogg", "audio/flac" to "flac", "video/mp4" to "mp4", "video/webm" to "webm", "video/quicktime" to "mov", "video/x-matroska" to "mkv", "video/3gpp" to "3gp")
+        byMime[mime]?.let { return it }
+        val head = runCatching { context.contentResolver.openInputStream(uri)?.use { it.readNBytes(16) } }.getOrNull() ?: return ""
+        return when {
+            head.size >= 3 && head[0] == 0xFF.toByte() && head[1] == 0xD8.toByte() -> "jpg"
+            head.size >= 8 && head[0] == 0x89.toByte() && String(head, 1, 3) == "PNG" -> "png"
+            head.size >= 12 && String(head, 0, 4) == "RIFF" && String(head, 8, 4) == "WEBP" -> "webp"
+            head.size >= 12 && String(head, 4, 4) == "ftyp" -> if (mime.startsWith("video/")) "mp4" else "m4a"
+            head.size >= 4 && String(head, 0, 4) == "OggS" -> "ogg"
+            head.size >= 3 && String(head, 0, 3) == "ID3" -> "mp3"
+            head.size >= 4 && String(head, 0, 4) == "fLaC" -> "flac"
+            else -> ""
+        }
+    }
     private fun decode(bytes: ByteArray): String {
         val decoded = runCatching { Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString() }.getOrNull()
         return (decoded ?: runCatching { Charset.forName("windows-1252").newDecoder().decode(ByteBuffer.wrap(bytes)).toString() }.getOrElse { bytes.toString(Charsets.UTF_8) })
@@ -201,7 +219,11 @@ object ConverterEngine {
     private fun mediaToMarkdown(context: Context, uri: Uri, name: String, isVideo: Boolean, warnings: MutableList<String>): String {
         val retriever = MediaMetadataRetriever()
         try {
-            retriever.setDataSource(context, uri)
+            val descriptor = context.contentResolver.openAssetFileDescriptor(uri, "r")
+            try {
+                if (descriptor != null && descriptor.length >= 0) retriever.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
+                else retriever.setDataSource(context, uri)
+            } finally { descriptor?.close() }
             fun meta(key: Int): String? = retriever.extractMetadata(key)?.takeIf { it.isNotBlank() }
             val duration = meta(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
             val out = StringBuilder()
