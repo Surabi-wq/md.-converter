@@ -71,6 +71,7 @@ data class ConvertedFile(
                 line = reader.readLine()
             } while (line != null && line.isBlank())
             var pendingBlankLines = 0
+            var wroteContent = false
             while (line != null) {
                 if (line.isBlank()) {
                     pendingBlankLines++
@@ -79,9 +80,11 @@ data class ConvertedFile(
                     pendingBlankLines = 0
                     writer.write(line)
                     writer.write("\n")
+                    wroteContent = true
                 }
                 line = reader.readLine()
             }
+            if (!wroteContent) writer.write("_Tidak ada konten teks yang dapat ditampilkan._")
         }
     }
 
