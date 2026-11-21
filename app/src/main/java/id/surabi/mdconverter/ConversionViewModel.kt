@@ -119,6 +119,8 @@ internal class ConversionViewModel : ViewModel() {
                                 }
                             }
                             savedCount++
+                        } catch (error: CancellationException) {
+                            throw error
                         } catch (error: Exception) {
                             saveErrors.add(converted.name + ": " + (error.message ?: "gagal disimpan"))
                         }
@@ -148,6 +150,14 @@ internal class ConversionViewModel : ViewModel() {
 
     fun cancel() {
         conversionJob?.cancel()
+    }
+
+    /** Removes abandoned cache files left behind if Android killed the process. */
+    fun cleanupOrphanedCacheFiles(cacheDir: File) {
+        val active = files.mapNotNull { it.cacheFilePath }.toHashSet()
+        cacheDir.listFiles()
+            ?.filter { it.name.startsWith("marka-") && it.name.endsWith(".md") && it.absolutePath !in active }
+            ?.forEach { it.delete() }
     }
 
     fun clearResults() {
