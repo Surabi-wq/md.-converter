@@ -1,6 +1,7 @@
 package id.surabi.mdconverter
 
 import android.net.Uri
+import android.provider.DocumentsContract
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -55,14 +56,21 @@ class MainActivity : ComponentActivity() {
         var preview by remember { mutableStateOf<ConvertedFile?>(null) }
         var pendingMarkdown by remember { mutableStateOf<String?>(null) }
         var pendingName by remember { mutableStateOf("hasil-konversi.md") }
+        val selectedUris = remember { mutableStateListOf<Uri>() }
+        var outputFolder by remember { mutableStateOf(getSharedPreferences("settings", MODE_PRIVATE).getString("output_tree", null)?.let(Uri::parse)) }
         val successfulCount = files.count { it.error == null }
         val combined = remember(files.toList()) { files.filter { it.error == null }.takeIf { it.isNotEmpty() }?.let(::combineMarkdown).orEmpty() }
 
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-            if (uris.isNotEmpty() && !busy) processFiles(uris, files) { isBusy, status ->
-                busy = isBusy
-                message = status
-            }
+            if (uris.isNotEmpty() && !busy) { selectedUris.clear(); selectedUris.addAll(uris); message = "${uris.size} file dipilih. Tekan konfirmasi untuk memulai." }
+        }
+        val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+            if (tree != null) runCatching {
+                contentResolver.takePersistableUriPermission(tree, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                getSharedPreferences("settings", MODE_PRIVATE).edit().putString("output_tree", tree.toString()).apply()
+                outputFolder = tree
+                message = "Folder keluaran tersimpan. Hasil berikutnya akan disimpan otomatis."
+            }.onFailure { message = "Gagal menyimpan izin folder: ${it.message}" }
         }
         val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
             val markdown = pendingMarkdown
@@ -117,17 +125,22 @@ class MainActivity : ComponentActivity() {
                                     "Pilih berbagai jenis file sekaligus. Setiap hasil akan menjadi bagian tersendiri dalam satu dokumen Markdown.",
                                     color = Color(0xFF49635D)
                                 )
-                                Button(
-                                    onClick = { picker.launch(arrayOf("*/*")) },
-                                    enabled = !busy,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Icon(Icons.Default.Add, null)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("Pilih file")
+                                Button(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+                                    Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp)); Text("1. Pilih file")
                                 }
-                                Text("Dapat memilih beberapa file dengan format berbeda.", fontSize = 12.sp, color = Color.Gray)
+                                Text("${selectedUris.size} file menunggu konfirmasi", fontSize = 12.sp, color = Color.Gray)
+                                Button(onClick = {
+                                    files.clear()
+                                    val batch = selectedUris.toList()
+                                    selectedUris.clear()
+                                    processFiles(batch, files, outputFolder) { isBusy, status -> busy = isBusy; message = status }
+                                }, enabled = !busy && selectedUris.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+                                    Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("2. Konfirmasi & mulai konversi")
+                                }
+                                OutlinedButton(onClick = { folderPicker.launch(outputFolder) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                                    Icon(Icons.Default.Folder, null); Spacer(Modifier.width(8.dp)); Text(if (outputFolder == null) "Pilih folder keluaran" else "Ganti folder keluaran")
+                                }
+                                Text(if (outputFolder == null) "Folder belum dipilih. Hasil dapat disimpan manual." else "Hasil gabungan akan disimpan otomatis ke folder pilihan.", fontSize = 12.sp, color = Color.Gray)
                             }
                         }
                     }
@@ -308,6 +321,7 @@ class MainActivity : ComponentActivity() {
     private fun processFiles(
         uris: List<Uri>,
         files: MutableList<ConvertedFile>,
+        outputFolder: Uri?,
         onStatus: (Boolean, String) -> Unit
     ) {
         lifecycleScope.launch {
@@ -344,7 +358,14 @@ class MainActivity : ComponentActivity() {
                     completed++
                     onStatus(true, "Memproses file $completed dari ${uris.size}…")
                 }
-                onStatus(false, "Selesai. $completed file telah diperiksa.")
+                val successful = files.filter { it.error == null }
+                if (successful.isNotEmpty() && outputFolder != null) {
+                    withContext(Dispatchers.IO) {
+                        saveToFolder(outputFolder, "konversi-${System.currentTimeMillis()}.md", combineMarkdown(successful))
+                    }
+                    onStatus(false, "Selesai. $completed file diproses dan hasil disimpan otomatis.")
+                } else if (successful.isNotEmpty()) onStatus(false, "Selesai. $completed file diperiksa. Pilih folder keluaran untuk simpan otomatis.")
+                else onStatus(false, "Tidak ada file yang berhasil dikonversi.")
             } catch (e: CancellationException) {
                 onStatus(false, "Proses dibatalkan setelah $completed file.")
                 throw e
@@ -354,6 +375,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun saveToFolder(tree: Uri, name: String, markdown: String) {
+        val root = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+        val output = DocumentsContract.createDocument(contentResolver, root, "text/markdown", name) ?: error("Tidak dapat membuat file pada folder tujuan.")
+        (contentResolver.openOutputStream(output, "wt") ?: error("Tidak dapat membuka file keluaran.")).bufferedWriter(Charsets.UTF_8).use { it.write(markdown) }
+    }
     private fun queryName(uri: Uri): String {
         contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
