@@ -174,7 +174,6 @@ internal object ArchiveDocumentReader {
             when (event) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "table" -> {
-                        if (rows.isNotEmpty()) sheets.add(sheetName to rows)
                         sheetName = attr(parser, "name", "urn:oasis:names:tc:opendocument:xmlns:table:1.0")
                             ?: "Lembar " + (sheets.size + 1)
                         rows = mutableListOf()
