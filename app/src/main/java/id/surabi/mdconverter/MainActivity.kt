@@ -180,9 +180,14 @@ class MainActivity : ComponentActivity() {
         }
         val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
             if (tree != null) runCatching {
-                contentResolver.takePersistableUriPermission(tree, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                val previousFolder = outputFolder
+                val readWriteFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                contentResolver.takePersistableUriPermission(tree, readWriteFlags)
                 getSharedPreferences("settings", MODE_PRIVATE).edit().putString("output_tree", tree.toString()).apply()
                 outputFolder = tree
+                if (previousFolder != null && previousFolder != tree) {
+                    runCatching { contentResolver.releasePersistableUriPermission(previousFolder, readWriteFlags) }
+                }
                 message = "Folder keluaran tersimpan. Hasil berikutnya akan disimpan otomatis."
             }.onFailure { message = "Gagal menyimpan izin folder: ${it.message}" }
         }
