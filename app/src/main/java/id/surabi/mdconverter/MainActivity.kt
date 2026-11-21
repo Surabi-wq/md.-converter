@@ -368,7 +368,6 @@ class MainActivity : ComponentActivity() {
                                         val folder = outputFolder
                                         mergeScope.launch {
                                             try {
-                                                val markdown = withContext(Dispatchers.IO) { combineMarkdown(successful) }
                                                 if (folder == null) {
                                                     pendingMarkdown = null
                                                     pendingFile = null
@@ -483,6 +482,11 @@ class MainActivity : ComponentActivity() {
                                         onClick = {
                                             mergeScope.launch {
                                                 try {
+                                                    val sourceBytes = file.cacheFilePath?.let { java.io.File(it).length() }
+                                                        ?: file.markdown.toByteArray(Charsets.UTF_8).size.toLong()
+                                                    require(sourceBytes <= 4L * 1024 * 1024) {
+                                                        "File terlalu besar untuk pratinjau dalam memori. Gunakan tombol Simpan untuk mengekspor hasil secara langsung."
+                                                    }
                                                     val markdown = withContext(Dispatchers.IO) { file.readMarkdown() }
                                                     preview = file.copy(markdown = markdown, cacheFilePath = null)
                                                 } catch (error: Exception) {
