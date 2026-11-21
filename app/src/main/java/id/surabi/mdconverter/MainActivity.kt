@@ -22,6 +22,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -107,9 +108,14 @@ class MainActivity : ComponentActivity() {
                 containerColor = Color(0xFFF4F7F5),
                 topBar = {
                     CenterAlignedTopAppBar(
-                        title = { Text("MD Converter", fontWeight = FontWeight.Bold) },
+                        title = { Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("MARKA", fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                            Text("File to Markdown", fontSize = 10.sp, color = Color(0xFF49635D))
+                        } },
                         navigationIcon = {
-                            Icon(Icons.Default.Description, null, Modifier.padding(start = 16.dp), tint = Color(0xFF315F55))
+                            Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFF315F55), modifier = Modifier.padding(start = 14.dp)) {
+                                Icon(painterResource(R.drawable.ic_marka_foreground), "Logo Marka", tint = Color.Unspecified, modifier = Modifier.padding(4.dp).size(30.dp))
+                            }
                         }
                     )
                 }
@@ -127,15 +133,15 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFF315F55)) {
-                                        Icon(Icons.Default.Description, null, tint = Color.White, modifier = Modifier.padding(9.dp).size(22.dp))
+                                        Icon(painterResource(R.drawable.ic_marka_foreground), "Logo Marka", tint = Color.Unspecified, modifier = Modifier.padding(4.dp).size(30.dp))
                                     }
                                     Column(Modifier.weight(1f)) {
-                                        Text("MD Converter", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF183D36))
-                                        Text("Konversi dokumen ke Markdown", fontSize = 12.sp, color = Color(0xFF49635D))
+                                        Text("MARKA", fontSize = 20.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp, color = Color(0xFF183D36))
+                                        Text("File to Markdown", fontSize = 12.sp, color = Color(0xFF49635D))
                                     }
                                 }
                                 Text(
-                                    "Pilih beberapa dokumen atau media. Hasilnya dapat ditinjau, diekspor satu per satu, atau digabungkan dalam satu dokumen terstruktur.",
+                                    "Ubah file jadi Markdown. Konversi dokumen dan media langsung di perangkat, lalu tinjau atau gabungkan hasilnya dalam satu dokumen terstruktur.",
                                     color = Color(0xFF49635D)
                                 )
                                 Button(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
@@ -146,11 +152,20 @@ class MainActivity : ComponentActivity() {
                                     if (selectedUris.isNotEmpty()) TextButton(onClick = { selectedUris.clear(); message = "Antrean pilihan dikosongkan." }, enabled = !busy) { Text("Kosongkan") }
                                 }
                                 if (selectedUris.isNotEmpty()) {
-                                    Text(
-                                        selectedUris.take(4).joinToString("\n") { it.lastPathSegment?.substringAfterLast('/')?.take(48) ?: "Dokumen terpilih" } +
-                                            if (selectedUris.size > 4) "\n+ ${selectedUris.size - 4} file lainnya" else "",
-                                        fontSize = 11.sp, color = Color(0xFF49635D), maxLines = 5
-                                    )
+                                    Text("File terpilih (${selectedUris.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF315F55))
+                                    selectedUris.take(4).forEach { uri ->
+                                        Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFFF1F5F2)) {
+                                            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Default.InsertDriveFile, null, tint = Color(0xFF315F55), modifier = Modifier.size(20.dp))
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(uri.lastPathSegment?.substringAfterLast('/')?.take(48) ?: "Dokumen terpilih", fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                                IconButton(onClick = { selectedUris.remove(uri) }, enabled = !busy) {
+                                                    Icon(Icons.Default.Close, "Hapus dari antrean", tint = Color.Gray, modifier = Modifier.size(18.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (selectedUris.size > 4) Text("+ ${selectedUris.size - 4} file lainnya", fontSize = 11.sp, color = Color(0xFF49635D))
                                 }
                                 Button(onClick = {
                                     files.clear()

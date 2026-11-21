@@ -1,6 +1,6 @@
-# Universal File to Markdown Converter
+# Marka — File to Markdown
 
-Aplikasi Android native untuk mengonversi dokumen dan media menjadi Markdown secara lokal. Beberapa file dengan format berbeda dapat digabungkan menjadi satu dokumen `.md`, dengan daftar isi, bagian terpisah per file, format sumber, dan catatan konversi. File asli tidak diubah dan aplikasi tidak mengunggah dokumen ke server.
+Marka adalah aplikasi Android native untuk mengonversi dokumen dan media menjadi Markdown secara lokal. Beberapa file dengan format berbeda dapat digabungkan menjadi satu dokumen `.md`, dengan daftar isi, bagian terpisah per file, format sumber, dan catatan konversi. File asli tidak diubah dan aplikasi tidak mengunggah dokumen ke server.
 
 ## Build APK
 Setiap push ke branch `main` menjalankan GitHub Actions. Artifact debug bernama `universal-file-to-markdown-debug`.
