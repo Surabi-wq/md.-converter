@@ -196,9 +196,11 @@ internal class ConversionViewModel : ViewModel() {
         completed = 0
         total = 0
         message = "Daftar hasil konversi dikosongkan."
+        historyReady = false
         viewModelScope.launch(Dispatchers.IO) {
             removed.forEach { it.deleteCachedContent() }
             writeHistoryIndex(context.applicationContext, emptyList())
+            withContext(Dispatchers.Main) { historyReady = true }
         }
     }
 
@@ -287,10 +289,13 @@ internal class ConversionViewModel : ViewModel() {
 
     private fun removeOrphanedFiles(context: Context, activeFiles: Set<String>) {
         val directory = historyDirectory(context)
+        val staleBefore = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
         directory.listFiles()
             ?.filter {
-                (it.name.endsWith(".tmp") || it.name.endsWith(".md")) &&
-                    it.absolutePath !in activeFiles
+                it.absolutePath !in activeFiles && (
+                    it.name.endsWith(".tmp") ||
+                    (it.name.endsWith(".md") && it.lastModified() in 1..staleBefore)
+                )
             }
             ?.forEach { it.delete() }
     }
