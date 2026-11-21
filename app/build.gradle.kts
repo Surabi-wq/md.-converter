@@ -6,7 +6,14 @@ plugins {
 android {
  namespace = "id.surabi.mdconverter"
  compileSdk = 35
- defaultConfig { applicationId = "id.surabi.mdconverter"; minSdk = 26; targetSdk = 35; versionCode = 7; versionName = "1.6.0" }
+ defaultConfig {
+  applicationId = "id.surabi.mdconverter"
+  minSdk = 26
+  targetSdk = 35
+  versionCode = 8
+  versionName = "1.7.0"
+  ndk { abiFilters += setOf("arm64-v8a", "armeabi-v7a") }
+ }
  buildFeatures { compose = true }
  compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
  kotlinOptions { jvmTarget = "17" }
