@@ -80,17 +80,61 @@ object ConverterEngine {
     private fun resolveExtension(name: String, mime: String, context: Context, uri: Uri): String {
         val fromName = name.substringAfterLast('.', "").lowercase()
         if (fromName.isNotBlank()) return fromName
-        val byMime = mapOf("image/jpeg" to "jpg", "image/png" to "png", "image/webp" to "webp", "image/gif" to "gif", "image/heic" to "heic", "image/heif" to "heif", "image/tiff" to "tiff", "image/bmp" to "bmp", "audio/x-m4a" to "m4a", "audio/mpeg" to "mp3", "audio/mp4" to "m4a", "audio/aac" to "aac", "audio/wav" to "wav", "audio/x-wav" to "wav", "audio/x-aac" to "aac", "audio/ogg" to "ogg", "audio/flac" to "flac", "audio/x-flac" to "flac", "audio/amr" to "amr", "audio/3gpp" to "amr", "audio/x-ms-wma" to "wma", "video/mp4" to "mp4", "video/x-m4v" to "m4v", "video/webm" to "webm", "video/quicktime" to "mov", "video/x-matroska" to "mkv", "video/3gpp" to "3gp", "video/mp2t" to "ts", "video/mpeg" to "mpeg", "video/x-msvideo" to "avi")
+        val byMime = mapOf(
+            "application/pdf" to "pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" to "docx",
+            "text/plain" to "txt", "text/markdown" to "md", "text/csv" to "csv",
+            "application/json" to "json", "text/html" to "html", "application/rtf" to "rtf",
+            "image/jpeg" to "jpg", "image/png" to "png", "image/webp" to "webp",
+            "image/gif" to "gif", "image/heic" to "heic", "image/heif" to "heif",
+            "image/tiff" to "tiff", "image/bmp" to "bmp",
+            "audio/x-m4a" to "m4a", "audio/mpeg" to "mp3", "audio/mp4" to "m4a",
+            "audio/aac" to "aac", "audio/wav" to "wav", "audio/x-wav" to "wav",
+            "audio/x-aac" to "aac", "audio/ogg" to "ogg", "audio/flac" to "flac",
+            "audio/x-flac" to "flac", "audio/amr" to "amr", "audio/3gpp" to "amr",
+            "audio/x-ms-wma" to "wma", "video/mp4" to "mp4", "video/x-m4v" to "m4v",
+            "video/webm" to "webm", "video/quicktime" to "mov", "video/x-matroska" to "mkv",
+            "video/3gpp" to "3gp", "video/mp2t" to "ts", "video/mpeg" to "mpeg",
+            "video/x-msvideo" to "avi"
+        )
         byMime[mime]?.let { return it }
-        val head = runCatching { context.contentResolver.openInputStream(uri)?.use { input -> val buffer = ByteArray(16); val count = input.read(buffer); if (count > 0) buffer.copyOf(count) else ByteArray(0) } }.getOrNull() ?: return ""
+        val head = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val buffer = ByteArray(32)
+                var count = 0
+                while (count < buffer.size) {
+                    val read = input.read(buffer, count, buffer.size - count)
+                    if (read <= 0) break
+                    count += read
+                }
+                buffer.copyOf(count)
+            }
+        }.getOrNull() ?: return ""
+        fun ascii(start: Int, length: Int) = if (head.size >= start + length) String(head, start, length, Charsets.US_ASCII) else ""
         return when {
+            head.size >= 5 && ascii(0, 5) == "%PDF-" -> "pdf"
             head.size >= 3 && head[0] == 0xFF.toByte() && head[1] == 0xD8.toByte() -> "jpg"
-            head.size >= 8 && head[0] == 0x89.toByte() && String(head, 1, 3) == "PNG" -> "png"
-            head.size >= 12 && String(head, 0, 4) == "RIFF" && String(head, 8, 4) == "WEBP" -> "webp"
-            head.size >= 12 && String(head, 4, 4) == "ftyp" -> { val brand = String(head, 8, 4).uppercase(); if (mime.startsWith("video/") || brand !in setOf("M4A ", "M4B ", "F4A ", "F4B ")) "mp4" else "m4a" }
-            head.size >= 4 && String(head, 0, 4) == "OggS" -> "ogg"
-            head.size >= 3 && String(head, 0, 3) == "ID3" -> "mp3"
-            head.size >= 4 && String(head, 0, 4) == "fLaC" -> "flac"
+            head.size >= 8 && head[0] == 0x89.toByte() && ascii(1, 3) == "PNG" -> "png"
+            ascii(0, 6) in setOf("GIF87a", "GIF89a") -> "gif"
+            ascii(0, 2) == "BM" -> "bmp"
+            head.size >= 4 && (ascii(0, 4) == "II*\\u0000" || ascii(0, 4) == "MM\\u0000*") -> "tiff"
+            ascii(0, 4) == "RIFF" && ascii(8, 4) == "WEBP" -> "webp"
+            ascii(0, 4) == "RIFF" && ascii(8, 4) == "WAVE" -> "wav"
+            ascii(0, 4) == "RIFF" && ascii(8, 4) == "AVI " -> "avi"
+            head.size >= 12 && ascii(4, 4) == "ftyp" -> {
+                val brand = ascii(8, 4)
+                when {
+                    mime.startsWith("video/") || brand == "qt  " || brand.startsWith("isom") || brand.startsWith("mp4") -> "mp4"
+                    brand in setOf("M4A ", "M4B ", "F4A ", "F4B ") -> "m4a"
+                    else -> "mp4"
+                }
+            }
+            ascii(0, 4) == "OggS" -> "ogg"
+            ascii(0, 3) == "ID3" || (head.size >= 2 && head[0] == 0xFF.toByte() && (head[1].toInt() and 0xE0) == 0xE0) -> "mp3"
+            ascii(0, 4) == "fLaC" -> "flac"
+            ascii(0, 6) == "#!AMR\\n" -> "amr"
+            head.size >= 4 && head[0] == 0x1A.toByte() && head[1] == 0x45.toByte() && head[2] == 0xDF.toByte() && head[3] == 0xA3.toByte() -> if (mime == "video/webm") "webm" else "mkv"
+            head.size >= 1 && head[0] == 0x47.toByte() -> "ts"
             else -> ""
         }
     }
@@ -318,7 +362,7 @@ object ConverterEngine {
         }
         val source = xml ?: error("DOCX tidak valid: document.xml tidak ditemukan.")
         val parser = Xml.newPullParser()
-        parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
+        parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
         parser.setInput(source.reader())
         val result = StringBuilder()
         var paragraph = StringBuilder()
