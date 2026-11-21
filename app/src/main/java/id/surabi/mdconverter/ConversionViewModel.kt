@@ -105,6 +105,8 @@ internal class ConversionViewModel : ViewModel() {
                                 error = null,
                                 cacheFilePath = stored
                             )
+                        } catch (error: CancellationException) {
+                            throw error
                         } catch (error: Exception) {
                             ConvertedFile(
                                 id = System.nanoTime(),
@@ -210,6 +212,7 @@ internal class ConversionViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 removed.forEach { it.deleteCachedContent() }
+                historyDirectory(context.applicationContext).listFiles()?.forEach { it.delete() }
                 writeHistoryIndex(context.applicationContext, emptyList())
             } catch (error: Exception) {
                 withContext(Dispatchers.Main) {
