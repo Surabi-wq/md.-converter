@@ -178,22 +178,29 @@ object ConverterEngine {
         return runCatching {
             context.contentResolver.openInputStream(uri)?.use { raw ->
                 java.util.zip.ZipInputStream(raw).use { zip ->
+                    var totalUncompressed = 0L
+                    var entryCount = 0
                     while (true) {
                         val entry = zip.nextEntry ?: break
+                        entryCount++
+                        require(entryCount <= 5000) { "Arsip memiliki terlalu banyak entri." }
                         names.add(entry.name)
-                        if (entry.name == "mimetype") {
-                            val output = ByteArrayOutputStream()
-                            val buffer = ByteArray(128)
-                            while (output.size() < 128) {
-                                val count = zip.read(buffer, 0, minOf(buffer.size, 128 - output.size()))
-                                if (count <= 0) break
-                                output.write(buffer, 0, count)
+                        val output = if (entry.name == "mimetype") ByteArrayOutputStream() else null
+                        val buffer = ByteArray(8192)
+                        while (true) {
+                            val count = zip.read(buffer)
+                            if (count < 0) break
+                            totalUncompressed += count
+                            require(totalUncompressed <= 128L * 1024 * 1024) {
+                                "Data hasil ekstraksi arsip melebihi batas aman 128 MB."
                             }
-                            openDocumentMime = output.toString("UTF-8").trim()
+                            if (output != null && output.size() < 128) {
+                                output.write(buffer, 0, minOf(count, 128 - output.size()))
+                            }
                         }
+                        if (output != null) openDocumentMime = output.toString("UTF-8").trim()
                         if (names.contains("word/document.xml") || names.contains("xl/workbook.xml") ||
                             names.contains("ppt/presentation.xml") || names.contains("META-INF/container.xml")) break
-                        zip.closeEntry()
                     }
                 }
             }
@@ -513,19 +520,28 @@ object ConverterEngine {
         require(bytes.size > 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4b.toByte()) { "DOCX tidak valid: arsip ZIP tidak ditemukan." }
         var xml: String? = null
         ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
+            var totalUncompressed = 0L
+            var entryCount = 0
             while (true) {
                 val entry = zip.nextEntry ?: break
-                if (entry.name == "word/document.xml") {
-                    val out = ByteArrayOutputStream()
-                    val buffer = ByteArray(8192)
-                    var size = 0
-                    while (true) {
-                        val n = zip.read(buffer)
-                        if (n < 0) break
+                entryCount++
+                require(entryCount <= 5000) { "DOCX memiliki terlalu banyak entri arsip." }
+                val selected = entry.name == "word/document.xml"
+                val out = if (selected) ByteArrayOutputStream() else null
+                val buffer = ByteArray(8192)
+                var size = 0
+                while (true) {
+                    val n = zip.read(buffer)
+                    if (n < 0) break
+                    totalUncompressed += n
+                    require(totalUncompressed <= 128L * 1024 * 1024) { "Total data DOCX hasil ekstraksi melebihi batas aman 128 MB." }
+                    if (out != null) {
                         size += n
                         require(size <= 20 * 1024 * 1024) { "Konten XML DOCX terlalu besar." }
                         out.write(buffer, 0, n)
                     }
+                }
+                if (out != null) {
                     xml = out.toString("UTF-8")
                     break
                 }
