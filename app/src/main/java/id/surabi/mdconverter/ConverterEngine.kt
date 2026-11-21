@@ -79,7 +79,7 @@ object ConverterEngine {
 
     private fun resolveExtension(name: String, mime: String, context: Context, uri: Uri): String {
         val fromName = name.substringAfterLast('.', "").lowercase()
-        if (fromName.isNotBlank()) return fromName
+        if (fromName.isNotBlank() && fromName !in setOf("bin", "dat", "tmp", "file")) return fromName
         val byMime = mapOf(
             "application/pdf" to "pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document" to "docx",
@@ -117,7 +117,7 @@ object ConverterEngine {
             head.size >= 8 && head[0] == 0x89.toByte() && ascii(1, 3) == "PNG" -> "png"
             ascii(0, 6) in setOf("GIF87a", "GIF89a") -> "gif"
             ascii(0, 2) == "BM" -> "bmp"
-            head.size >= 4 && (ascii(0, 4) == "II*\\u0000" || ascii(0, 4) == "MM\\u0000*") -> "tiff"
+            head.size >= 4 && ((head[0] == 0x49.toByte() && head[1] == 0x49.toByte() && head[2] == 0x2A.toByte() && head[3] == 0.toByte()) || (head[0] == 0x4D.toByte() && head[1] == 0x4D.toByte() && head[2] == 0.toByte() && head[3] == 0x2A.toByte())) -> "tiff"
             ascii(0, 4) == "RIFF" && ascii(8, 4) == "WEBP" -> "webp"
             ascii(0, 4) == "RIFF" && ascii(8, 4) == "WAVE" -> "wav"
             ascii(0, 4) == "RIFF" && ascii(8, 4) == "AVI " -> "avi"
@@ -132,7 +132,7 @@ object ConverterEngine {
             ascii(0, 4) == "OggS" -> "ogg"
             ascii(0, 3) == "ID3" || (head.size >= 2 && head[0] == 0xFF.toByte() && (head[1].toInt() and 0xE0) == 0xE0) -> "mp3"
             ascii(0, 4) == "fLaC" -> "flac"
-            ascii(0, 6) == "#!AMR\\n" -> "amr"
+            head.size >= 6 && ascii(0, 5) == "#!AMR" && head[5] == 0x0A.toByte() -> "amr"
             head.size >= 4 && head[0] == 0x1A.toByte() && head[1] == 0x45.toByte() && head[2] == 0xDF.toByte() && head[3] == 0xA3.toByte() -> if (mime == "video/webm") "webm" else "mkv"
             head.size >= 1 && head[0] == 0x47.toByte() -> "ts"
             else -> ""
