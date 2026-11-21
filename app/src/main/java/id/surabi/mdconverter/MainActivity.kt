@@ -40,7 +40,7 @@ class MainActivity:ComponentActivity(){
   val picker=rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()){uris->if(uris.isNotEmpty())convertFiles(uris,files){busy=it;message=if(it)"Memproses file…" else "Pemrosesan selesai."}}
   val saver=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")){uri->
    val item=preview
-   if(uri!=null&&item!=null){contentResolver.openOutputStream(uri)?.bufferedWriter(Charsets.UTF_8)?.use{it.write(item.markdown)};message="File Markdown berhasil disimpan."}
+   if(uri!=null&&item!=null){try{val output=contentResolver.openOutputStream(uri)?:error("Lokasi penyimpanan tidak dapat dibuka.");output.bufferedWriter(Charsets.UTF_8).use{it.write(item.markdown);it.flush()};message="File Markdown berhasil disimpan."}catch(e:Exception){message="Gagal menyimpan: ${e.message?:\"kesalahan tidak diketahui\"}"}}
   }
   MaterialTheme(colorScheme=lightColorScheme(primary=Color(0xFF315F55),secondary=Color(0xFF82A99A),background=Color(0xFFF4F7F5))){
    Scaffold(containerColor=Color(0xFFF4F7F5),topBar={CenterAlignedTopAppBar(title={Text("MD Converter",fontWeight=FontWeight.Bold)},navigationIcon={Icon(Icons.Default.Description,null,Modifier.padding(start=16.dp),tint=Color(0xFF315F55))})}){pad->
