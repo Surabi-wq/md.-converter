@@ -181,24 +181,44 @@ object ConverterEngine {
         val names = mutableSetOf<String>()
         var openDocumentMime: String? = null
         return runCatching {
+            var totalUncompressed = 0L
+            var entryCount = 0
             context.contentResolver.openInputStream(uri)?.use { raw ->
-                java.util.zip.ZipInputStream(raw).use { zip ->
+                ZipInputStream(raw).use { zip ->
                     while (true) {
                         val entry = zip.nextEntry ?: break
-                        names.add(entry.name)
-                        if (entry.name == "mimetype") {
-                            val output = ByteArrayOutputStream()
-                            val buffer = ByteArray(128)
-                            while (output.size() < 128) {
-                                val count = zip.read(buffer, 0, minOf(buffer.size, 128 - output.size()))
-                                if (count <= 0) break
-                                output.write(buffer, 0, count)
+                        entryCount++
+                        require(entryCount <= 10_000) { "Arsip memiliki terlalu banyak entri." }
+                        val captureMime = entry.name == "mimetype"
+                        var entryBytes = 0L
+                        val output = if (captureMime) ByteArrayOutputStream(128) else null
+                        val buffer = ByteArray(8192)
+                        while (true) {
+                            val count = zip.read(buffer)
+                            if (count < 0) break
+                            entryBytes += count
+                            totalUncompressed += count
+                            require(entryBytes <= 32L * 1024 * 1024) {
+                                "Satu entri arsip terlalu besar saat mendeteksi format."
                             }
-                            openDocumentMime = output.toString("UTF-8").trim()
+                            require(totalUncompressed <= 64L * 1024 * 1024) {
+                                "Data hasil dekompresi arsip terlalu besar saat mendeteksi format."
+                            }
+                            if (captureMime && output!!.size() < 128) {
+                                output.write(buffer, 0, minOf(count, 128 - output.size()))
+                            }
                         }
-                        if (names.contains("word/document.xml") || names.contains("xl/workbook.xml") ||
-                            names.contains("ppt/presentation.xml") || names.contains("META-INF/container.xml")) break
-                        zip.closeEntry()
+                        if (captureMime) openDocumentMime = output!!.toString("UTF-8").trim()
+                        if (entry.name in setOf(
+                                "word/document.xml",
+                                "xl/workbook.xml",
+                                "ppt/presentation.xml",
+                                "META-INF/container.xml"
+                            )
+                        ) {
+                            names.add(entry.name)
+                            break
+                        }
                     }
                 }
             }
