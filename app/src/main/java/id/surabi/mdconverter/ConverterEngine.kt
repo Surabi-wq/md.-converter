@@ -27,7 +27,7 @@ data class ConversionResult(val markdown: String, val format: String, val warnin
 object ConverterEngine {
     private const val MAX_BYTES = 100L * 1024 * 1024
     private val imageTypes = setOf("jpg","jpeg","png","webp","bmp","gif","tif","tiff","heic","heif")
-    private val audioTypes = setOf("mp3","m4a","aac","wav","ogg","oga","opus","flac","amr","3gp","wma")
+    private val audioTypes = setOf("mp3","m4a","aac","wav","ogg","oga","opus","flac","amr","wma")
     private val videoTypes = setOf("mp4","m4v","mkv","webm","mov","avi","3gp","ts","mpeg","mpg")
     private val codeTypes = setOf("py","js","ts","jsx","tsx","java","kt","kts","c","h","cpp","hpp","cs","php","go","rs","swift","css","scss","sass","sh","bash","bat","ps1","sql","rb","r","lua","dart","scala")
 
