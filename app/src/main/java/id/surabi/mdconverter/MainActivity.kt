@@ -272,7 +272,11 @@ class MainActivity : ComponentActivity() {
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("${selectedUris.size} file menunggu konfirmasi", fontSize = 12.sp, color = Color.Gray, modifier = Modifier.weight(1f))
-                                    if (selectedUris.isNotEmpty()) TextButton(onClick = { selectedUris.clear(); message = "Antrean pilihan dikosongkan." }, enabled = !busy) { Text("Kosongkan") }
+                                    if (selectedUris.isNotEmpty()) TextButton(onClick = {
+                                        selectedUris.toList().forEach { DocumentStorage.releaseReadPermission(this@MainActivity, it) }
+                                        selectedUris.clear()
+                                        message = "Antrean pilihan dikosongkan."
+                                    }, enabled = !busy) { Text("Kosongkan") }
                                 }
                                 if (selectedUris.isNotEmpty()) {
                                     Text("File terpilih (${selectedUris.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF315F55))
@@ -288,7 +292,10 @@ class MainActivity : ComponentActivity() {
                                                 Icon(Icons.Default.InsertDriveFile, null, tint = Color(0xFF315F55), modifier = Modifier.size(20.dp))
                                                 Spacer(Modifier.width(8.dp))
                                                 Text(displayName.take(48), fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                                                IconButton(onClick = { selectedUris.remove(uri) }, enabled = !busy) {
+                                                IconButton(onClick = {
+                                                    selectedUris.remove(uri)
+                                                    DocumentStorage.releaseReadPermission(this@MainActivity, uri)
+                                                }, enabled = !busy) {
                                                     Icon(Icons.Default.Close, "Hapus dari antrean", tint = Color.Gray, modifier = Modifier.size(18.dp))
                                                 }
                                             }
