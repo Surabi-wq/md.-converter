@@ -80,7 +80,9 @@ Deteksi format menggunakan kombinasi signature file, MIME dari Android, dan ekst
 - Pembatalan dilakukan dengan aman pada batas antarfile: file yang sedang aktif dituntaskan terlebih dahulu, sedangkan file yang belum diproses dikembalikan ke antrean.
 - Penggabungan Markdown hanya dihitung ketika diminta, bukan setiap kali daftar hasil berubah.
 - Nama file antrean dibaca di thread latar, dan izin baca SAF disimpan saat penyedia dokumen mengizinkan.
-- Penggabungan Markdown hanya dihitung ketika diminta, bukan setiap kali daftar hasil berubah.
+- Penggabungan Markdown hanya dihitung ketika diminta, bukan setiap kali daftar hasil berubah. Ekspor dokumen gabungan menulis isi berkas riwayat secara bertahap, bukan menggabungkan seluruh sumber menjadi satu string besar di RAM.
+- Pratinjau dokumen gabungan dibatasi untuk sumber hingga sekitar 8 MB; ekspor langsung tetap tersedia untuk dokumen yang lebih besar.
+- Preview satu file menampilkan judul, paragraf, daftar, tabel, kutipan, dan blok kode sebagai elemen visual, sementara file ekspor tetap berupa Markdown asli.
 - Pemindaian ZIP membatasi jumlah entri, ukuran entri, dan total data dekompresi termasuk entri yang dilewati.
 - CSV mencoba mendeteksi pemisah koma, titik koma, tab, dan pipe. JSON/JSONL kini menerima nilai primitif seperti string, angka, boolean, dan null.
 - Signature AAC ADTS, frame MPEG audio, dan Opus di dalam Ogg dibedakan lebih baik.
@@ -111,6 +113,7 @@ Pemrosesan dan riwayat dilakukan secara lokal. File asli tidak diubah dan tidak 
 - Target SDK: 35
 - JDK: 17
 - Gradle: 8.9
+- ABI APK: ARM64 (`arm64-v8a`) dan ARMv7 (`armeabi-v7a`); x86/x86_64 tidak disertakan.
 - Build debug: `gradle --no-daemon :app:assembleDebug`
 - Tes unit: `gradle --no-daemon :app:testDebugUnitTest`
 - Android lint: `gradle --no-daemon :app:lintDebug`
