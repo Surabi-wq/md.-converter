@@ -87,7 +87,7 @@ object ConverterEngine {
             head.size >= 3 && head[0] == 0xFF.toByte() && head[1] == 0xD8.toByte() -> "jpg"
             head.size >= 8 && head[0] == 0x89.toByte() && String(head, 1, 3) == "PNG" -> "png"
             head.size >= 12 && String(head, 0, 4) == "RIFF" && String(head, 8, 4) == "WEBP" -> "webp"
-            head.size >= 12 && String(head, 4, 4) == "ftyp" -> if (mime.startsWith("video/")) "mp4" else "m4a"
+            head.size >= 12 && String(head, 4, 4) == "ftyp" -> { val brand = String(head, 8, 4).uppercase(); if (mime.startsWith("video/") || brand !in setOf("M4A ", "M4B ", "F4A ", "F4B ")) "mp4" else "m4a" }
             head.size >= 4 && String(head, 0, 4) == "OggS" -> "ogg"
             head.size >= 3 && String(head, 0, 3) == "ID3" -> "mp3"
             head.size >= 4 && String(head, 0, 4) == "fLaC" -> "flac"
@@ -241,7 +241,7 @@ object ConverterEngine {
                 meta(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.let { out.appendLine("- Rotasi: $it derajat") }
                 out.appendLine(); out.appendLine("## Teks pada cuplikan video (OCR)")
                 val total = duration ?: 0L
-                val points = if (total > 0) listOf(0L, total / 3, total * 2 / 3, (total - 1).coerceAtLeast(0)) else listOf(-1L)
+                val points = if (total > 0) listOf(total / 3, total * 2 / 3) else listOf(-1L)
                 var found = false
                 points.distinct().forEachIndexed { index, ms ->
                     val frame = if (ms < 0) retriever.getFrameAtTime() else retriever.getFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
@@ -251,7 +251,7 @@ object ConverterEngine {
                     } finally { frame.recycle() }
                 }
                 if (!found) out.appendLine("_Tidak ditemukan teks pada cuplikan yang diperiksa._")
-                warnings.add("Video diperiksa pada maksimal empat cuplikan; hasil OCR bukan transkrip dialog penuh.")
+                warnings.add("Video diperiksa pada maksimal dua cuplikan; hasil OCR bukan transkrip dialog penuh.")
             } else {
                 out.appendLine(); out.appendLine("## Transkripsi"); out.appendLine("_Transkripsi ucapan/lirik belum tersedia; yang diekstrak hanya metadata audio._")
                 warnings.add("Audio belum ditranskripsikan. Diperlukan mesin speech-to-text untuk mengubah ucapan menjadi teks.")
