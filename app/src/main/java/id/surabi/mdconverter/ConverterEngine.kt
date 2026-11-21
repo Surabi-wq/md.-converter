@@ -122,7 +122,7 @@ object ConverterEngine {
         )
         val head = runCatching {
             context.contentResolver.openInputStream(uri)?.use { input ->
-                val buffer = ByteArray(32)
+                val buffer = ByteArray(128)
                 var count = 0
                 while (count < buffer.size) {
                     val read = input.read(buffer, count, buffer.size - count)
