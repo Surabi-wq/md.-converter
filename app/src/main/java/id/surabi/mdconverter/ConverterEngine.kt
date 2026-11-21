@@ -382,7 +382,6 @@ object ConverterEngine {
         val options = BitmapFactory.Options().apply {
             inSampleSize = sample
             inPreferredConfig = if (ext in setOf("jpg", "jpeg")) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
-            inDither = true
         }
         val bitmap = context.contentResolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, options)
