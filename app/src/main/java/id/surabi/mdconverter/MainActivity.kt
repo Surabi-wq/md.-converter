@@ -30,7 +30,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -44,7 +43,7 @@ data class ConvertedFile(
 )
 
 class MainActivity : ComponentActivity() {
-    private var conversionJob: Job? = null
+    @Volatile private var cancelAfterCurrentFile = false
     private var incomingSharedUris: List<Uri> = emptyList()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -208,7 +207,8 @@ class MainActivity : ComponentActivity() {
                                     val batch = selectedUris.toList()
                                     selectedUris.clear()
                                     progress = 0f
-                                    conversionJob = processFiles(batch, files, outputFolder) { isBusy, status, fraction ->
+                                    cancelAfterCurrentFile = false
+                                    processFiles(batch, files, outputFolder) { isBusy, status, fraction ->
                                         busy = isBusy
                                         message = status
                                         progress = fraction
@@ -218,7 +218,10 @@ class MainActivity : ComponentActivity() {
                                 }
                                 if (busy) {
                                     OutlinedButton(
-                                        onClick = { conversionJob?.cancel() },
+                                        onClick = {
+                                            cancelAfterCurrentFile = true
+                                            message = "Permintaan pembatalan diterima. File yang sedang aktif akan dituntaskan terlebih dahulu."
+                                        },
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Icon(Icons.Default.Close, null); Spacer(Modifier.width(8.dp))
@@ -494,9 +497,14 @@ class MainActivity : ComponentActivity() {
     ): Job = lifecycleScope.launch {
             onStatus(true, "Memproses " + uris.size + " file secara berurutan…", 0f)
             var completed = 0
+            var wasCancelled = false
             val batchResults = mutableListOf<ConvertedFile>()
             try {
                 for (uri in uris) {
+                    if (cancelAfterCurrentFile) {
+                        wasCancelled = true
+                        break
+                    }
                     val converted = withContext(Dispatchers.IO) {
                         val name = runCatching { queryName(uri) }.getOrDefault("dokumen")
                         try {
@@ -526,6 +534,10 @@ class MainActivity : ComponentActivity() {
                     batchResults.add(converted)
                     completed++
                     onStatus(true, "Memproses file " + completed + " dari " + uris.size + "…", completed.toFloat() / uris.size.coerceAtLeast(1))
+                    if (cancelAfterCurrentFile) {
+                        wasCancelled = true
+                        break
+                    }
                 }
 
                 val successful = batchResults.filter { it.error == null }
@@ -544,11 +556,14 @@ class MainActivity : ComponentActivity() {
                     }
                     val status = "Konversi selesai: " + completed + " file diperiksa; " + savedCount +
                         " hasil tersimpan dengan nama sumber + .md. Untuk menyatukan hasil, gunakan tombol 3."
-                    onStatus(false, if (saveErrors.isEmpty()) status else status + " Gagal menyimpan: " + saveErrors.joinToString("; "), 1f)
+                    val completedStatus = if (wasCancelled) "Proses dibatalkan setelah $completed file aktif selesai; hasil batch yang selesai tetap dipertahankan." else status
+                    onStatus(false, if (saveErrors.isEmpty()) completedStatus else completedStatus + " Gagal menyimpan: " + saveErrors.joinToString("; "), completed.toFloat() / uris.size.coerceAtLeast(1))
                 } else if (successful.isNotEmpty()) {
-                    onStatus(false, "Konversi selesai: " + completed + " file diperiksa. Pilih folder keluaran untuk simpan otomatis atau ekspor tiap hasil. Gunakan tombol 3 untuk menggabungkan.", 1f)
+                    val completedStatus = if (wasCancelled) "Proses dibatalkan setelah $completed file aktif selesai; hasil batch tetap dipertahankan." else "Konversi selesai: " + completed + " file diperiksa. Pilih folder keluaran untuk simpan otomatis atau ekspor tiap hasil. Gunakan tombol 3 untuk menggabungkan."
+                    onStatus(false, completedStatus, completed.toFloat() / uris.size.coerceAtLeast(1))
                 } else {
-                    onStatus(false, "Tidak ada file yang berhasil dikonversi.", 1f)
+                    val emptyStatus = if (wasCancelled) "Proses dibatalkan sebelum file berikutnya dimulai." else "Tidak ada file yang berhasil dikonversi."
+                    onStatus(false, emptyStatus, completed.toFloat() / uris.size.coerceAtLeast(1))
                 }
             } catch (e: CancellationException) {
                 onStatus(false, "Proses dibatalkan setelah " + completed + " file aktif selesai.", completed.toFloat() / uris.size.coerceAtLeast(1))
