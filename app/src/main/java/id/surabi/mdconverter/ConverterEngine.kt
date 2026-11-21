@@ -18,6 +18,7 @@ import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 import org.xmlpull.v1.XmlPullParser
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -76,7 +77,11 @@ object ConverterEngine {
             ext == "docx" -> docx(bytes, warnings)
             ext in setOf("txt", "md", "markdown", "mdx", "log", "rst", "adoc", "tex") -> text.trimEnd()
             ext in codeTypes -> fenced(ext, text)
-            ext == "csv" || ext == "tsv" -> table(text, if (ext == "tsv") '\t' else ',')
+            ext == "csv" || ext == "tsv" -> {
+                val delimiter = if (ext == "tsv") '\t' else detectCsvDelimiter(text)
+                if (ext == "csv" && delimiter == ';') warnings.add("CSV: pemisah titik koma (;) dideteksi otomatis.")
+                table(text, delimiter)
+            }
             ext == "json" -> json(text)
             ext == "jsonl" || ext == "ndjson" -> jsonl(text)
             ext in setOf("html", "htm", "xhtml") -> html(text)
@@ -236,26 +241,44 @@ object ConverterEngine {
         return "$fence$ext\n${value.trimEnd()}\n$fence"
     }
 
-    private fun json(value: String): String {
-        val source = value.trim()
-        require(source.isNotEmpty()) { "JSON kosong." }
-        val result = when (source.first()) {
-            '{' -> JSONObject(source).toString(2)
-            '[' -> JSONArray(source).toString(2)
-            else -> error("JSON harus berupa objek atau array.")
+    private fun normalizeJson(source: String): String {
+        require(source.isNotBlank()) { "JSON kosong." }
+        val parser = JSONTokener(source)
+        val parsed = parser.nextValue()
+        require(parser.nextClean() == '\u0000') { "JSON memiliki data tambahan setelah nilai utama." }
+        return when (parsed) {
+            is JSONObject -> parsed.toString(2)
+            is JSONArray -> parsed.toString(2)
+            else -> source
         }
-        return fenced("json", result)
     }
+
+    private fun json(value: String): String = fenced("json", normalizeJson(value.trim()))
 
     private fun jsonl(value: String): String {
         val items = value.lineSequence().filter { it.isNotBlank() }.mapIndexed { i, line ->
-            runCatching {
-                val s = line.trim()
-                if (s.startsWith("{")) JSONObject(s).toString(2) else JSONArray(s).toString(2)
-            }.getOrElse { error("JSONL tidak valid pada baris ${i + 1}.") }
+            runCatching { normalizeJson(line.trim()) }
+                .getOrElse { error("JSONL tidak valid pada baris ${i + 1}: ${it.message ?: "nilai JSON salah"}.") }
         }.toList()
         require(items.isNotEmpty()) { "File JSONL kosong." }
         return items.mapIndexed { i, item -> "### Record ${i + 1}\n\n${fenced("json", item)}" }.joinToString("\n\n")
+    }
+
+    private fun detectCsvDelimiter(value: String): Char {
+        val firstLine = value.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+        val counts = linkedMapOf(',' to 0, ';' to 0, '\t' to 0)
+        var quoted = false
+        var index = 0
+        while (index < firstLine.length) {
+            val char = firstLine[index]
+            when {
+                char == '"' && quoted && index + 1 < firstLine.length && firstLine[index + 1] == '"' -> index++
+                char == '"' -> quoted = !quoted
+                !quoted && counts.containsKey(char) -> counts[char] = counts.getValue(char) + 1
+            }
+            index++
+        }
+        return counts.maxByOrNull { it.value }?.key?.takeIf { counts.getValue(it) > 0 } ?: ','
     }
 
     private fun table(value: String, delimiter: Char): String {
