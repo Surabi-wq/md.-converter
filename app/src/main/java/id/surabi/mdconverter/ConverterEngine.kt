@@ -598,23 +598,36 @@ object ConverterEngine {
     }
 
     private fun docx(bytes: ByteArray, warnings: MutableList<String>): String {
-        require(bytes.size > 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4b.toByte()) { "DOCX tidak valid: arsip ZIP tidak ditemukan." }
+        require(bytes.size > 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4b.toByte()) {
+            "DOCX tidak valid: arsip ZIP tidak ditemukan."
+        }
         var xml: String? = null
+        var totalUncompressed = 0L
+        var entryCount = 0
         ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
-                if (entry.name == "word/document.xml") {
-                    val out = ByteArrayOutputStream()
-                    val buffer = ByteArray(8192)
-                    var size = 0
-                    while (true) {
-                        val n = zip.read(buffer)
-                        if (n < 0) break
-                        size += n
-                        require(size <= 20 * 1024 * 1024) { "Konten XML DOCX terlalu besar." }
-                        out.write(buffer, 0, n)
+                entryCount++
+                require(entryCount <= 10_000) { "DOCX memiliki terlalu banyak entri arsip." }
+                val isDocumentXml = entry.name == "word/document.xml"
+                val output = if (isDocumentXml) ByteArrayOutputStream() else null
+                var entrySize = 0L
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val count = zip.read(buffer)
+                    if (count < 0) break
+                    entrySize += count
+                    totalUncompressed += count
+                    require(entrySize <= if (isDocumentXml) 20L * 1024 * 1024 else 32L * 1024 * 1024) {
+                        "Konten arsip DOCX terlalu besar pada ${entry.name}."
                     }
-                    xml = out.toString("UTF-8")
+                    require(totalUncompressed <= 64L * 1024 * 1024) {
+                        "Total data hasil dekompresi DOCX melebihi 64 MB."
+                    }
+                    if (isDocumentXml) output!!.write(buffer, 0, count)
+                }
+                if (isDocumentXml) {
+                    xml = output!!.toString("UTF-8")
                     break
                 }
             }
