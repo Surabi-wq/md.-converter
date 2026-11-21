@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
+import kotlinx.coroutines.CancellationException
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -49,7 +50,10 @@ internal class ConversionViewModel : ViewModel() {
         viewModelScope.launch {
             val restored = withContext(Dispatchers.IO) { loadHistory(appContext) }
             files.addAll(restored)
-            withContext(Dispatchers.IO) { removeOrphanedFiles(appContext, files.mapNotNull { it.cacheFilePath }.toSet()) }
+            val activeFiles = files.mapNotNull { it.cacheFilePath }.toSet()
+            withContext(Dispatchers.IO) { removeOrphanedFiles(appContext, activeFiles) }
+            enforceHistoryLimits()
+            persistHistory(appContext)
             historyReady = true
             if (restored.isNotEmpty()) {
                 message = "Riwayat lokal dipulihkan: \${restored.size} hasil. Hasil disimpan di perangkat ini."
@@ -72,6 +76,7 @@ internal class ConversionViewModel : ViewModel() {
             var wasCancelled = false
             var historyTrimmed = false
             val saveErrors = mutableListOf<String>()
+            val batchResults = mutableListOf<ConvertedFile>()
 
             try {
                 for ((index, uri) in uris.withIndex()) {
@@ -111,6 +116,7 @@ internal class ConversionViewModel : ViewModel() {
                     }
 
                     files.add(converted)
+                    batchResults.add(converted)
                     completed++
                     progress = completed.toFloat() / total.coerceAtLeast(1)
                     message = "Memproses file $completed dari $total…"
@@ -141,7 +147,7 @@ internal class ConversionViewModel : ViewModel() {
                         }
                     }
 
-                    historyTrimmed = enforceHistoryLimits()
+                    historyTrimmed = enforceHistoryLimits() || historyTrimmed
                     persistHistory(appContext)
 
                     if (cancelRequested) {
@@ -151,7 +157,7 @@ internal class ConversionViewModel : ViewModel() {
                     }
                 }
 
-                val successCount = files.count { it.error == null }
+                val successCount = batchResults.count { it.error == null }
                 val summary = when {
                     outputFolder != null -> "Batch selesai: $completed dari $total file diproses; $savedCount hasil batch ini tersimpan otomatis."
                     else -> "Batch selesai: $completed dari $total file diproses. Hasil tersedia pada riwayat lokal."
@@ -164,6 +170,8 @@ internal class ConversionViewModel : ViewModel() {
                 if (historyTrimmed) {
                     message += " Hasil paling lama dihapus karena batas riwayat lokal tercapai."
                 }
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Exception) {
                 message = "Proses terhenti: " + (error.message ?: "kesalahan tidak diketahui")
             } finally {
@@ -190,7 +198,7 @@ internal class ConversionViewModel : ViewModel() {
         message = "Daftar hasil konversi dikosongkan."
         viewModelScope.launch(Dispatchers.IO) {
             removed.forEach { it.deleteCachedContent() }
-            persistHistory(context.applicationContext)
+            writeHistoryIndex(context.applicationContext, emptyList())
         }
     }
 
@@ -210,12 +218,17 @@ internal class ConversionViewModel : ViewModel() {
         destination.absolutePath
     }.getOrNull()
 
-    private fun persistHistory(context: Context) {
+    private suspend fun persistHistory(context: Context) {
+        val snapshot = files.toList()
+        withContext(Dispatchers.IO) { writeHistoryIndex(context, snapshot) }
+    }
+
+    private fun writeHistoryIndex(context: Context, items: List<ConvertedFile>) {
         val directory = historyDirectory(context)
         if (!directory.exists() && !directory.mkdirs()) return
 
         val entries = JSONArray()
-        files.forEach { item ->
+        items.forEach { item ->
             val warnings = JSONArray()
             item.warnings.forEach(warnings::put)
             val entry = JSONObject()
