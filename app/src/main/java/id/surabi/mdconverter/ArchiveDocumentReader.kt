@@ -11,8 +11,11 @@ import java.util.zip.ZipInputStream
 
 /** Extracts common ZIP-based document formats without a large office-suite dependency. */
 internal object ArchiveDocumentReader {
-    private const val MAX_ENTRY_BYTES = 12 * 1024 * 1024
-    private const val MAX_TOTAL_BYTES = 40 * 1024 * 1024
+    private const val MAX_ENTRY_BYTES = 12L * 1024 * 1024
+    private const val MAX_TOTAL_BYTES = 40L * 1024 * 1024
+    private const val MAX_UNSELECTED_ENTRY_BYTES = 32L * 1024 * 1024
+    private const val MAX_ARCHIVE_UNCOMPRESSED_BYTES = 80L * 1024 * 1024
+    private const val MAX_ARCHIVE_ENTRIES = 10_000
     private const val MAX_ROWS_PER_SHEET = 5000
 
     fun convert(extension: String, bytes: ByteArray, warnings: MutableList<String>): String =
@@ -29,25 +32,44 @@ internal object ArchiveDocumentReader {
 
     private fun readEntries(bytes: ByteArray, keep: (String) -> Boolean): LinkedHashMap<String, String> {
         val result = linkedMapOf<String, String>()
-        var total = 0
+        var archiveTotal = 0L
+        var selectedTotal = 0L
+        var entryCount = 0
         ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
-                val name = entry.name
-                if (!entry.isDirectory && keep(name)) {
-                    val output = ByteArrayOutputStream()
+                entryCount++
+                require(entryCount <= MAX_ARCHIVE_ENTRIES) { "Arsip memiliki terlalu banyak entri." }
+
+                if (!entry.isDirectory) {
+                    val selected = keep(entry.name)
+                    val output = if (selected) ByteArrayOutputStream() else null
+                    var entrySize = 0L
                     val buffer = ByteArray(8192)
-                    var entrySize = 0
+
+                    // Read and account for skipped entries too. ZipInputStream.closeEntry()
+                    // would otherwise drain them without our decompression limits being checked.
                     while (true) {
                         val count = zip.read(buffer)
                         if (count < 0) break
                         entrySize += count
-                        total += count
-                        require(entrySize <= MAX_ENTRY_BYTES) { "Konten arsip terlalu besar pada $name." }
-                        require(total <= MAX_TOTAL_BYTES) { "Total konten teks arsip melebihi batas aman 40 MB." }
-                        output.write(buffer, 0, count)
+                        archiveTotal += count
+                        require(entrySize <= if (selected) MAX_ENTRY_BYTES else MAX_UNSELECTED_ENTRY_BYTES) {
+                            "Konten arsip terlalu besar pada ${entry.name}."
+                        }
+                        require(archiveTotal <= MAX_ARCHIVE_UNCOMPRESSED_BYTES) {
+                            "Total data hasil dekompresi arsip melebihi batas aman 80 MB."
+                        }
+
+                        if (selected) {
+                            selectedTotal += count
+                            require(selectedTotal <= MAX_TOTAL_BYTES) {
+                                "Total konten teks arsip melebihi batas aman 40 MB."
+                            }
+                            output!!.write(buffer, 0, count)
+                        }
                     }
-                    result[name] = output.toString("UTF-8")
+                    if (selected) result[entry.name] = output!!.toString("UTF-8")
                 }
                 zip.closeEntry()
             }

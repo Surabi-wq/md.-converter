@@ -16,8 +16,10 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.google.android.gms.tasks.Tasks
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
+import com.tom_roush.pdfbox.rendering.PDFRenderer
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 import org.xmlpull.v1.XmlPullParser
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -29,6 +31,7 @@ data class ConversionResult(val markdown: String, val format: String, val warnin
 
 object ConverterEngine {
     private const val MAX_BYTES = 64L * 1024 * 1024
+    private const val MAX_PDF_OCR_PAGES = 50
     private val imageTypes = SupportedFormats.imageTypes
     private val audioTypes = SupportedFormats.audioTypes
     private val videoTypes = SupportedFormats.videoTypes
@@ -76,7 +79,8 @@ object ConverterEngine {
             ext == "docx" -> docx(bytes, warnings)
             ext in setOf("txt", "md", "markdown", "mdx", "log", "rst", "adoc", "tex") -> text.trimEnd()
             ext in codeTypes -> fenced(ext, text)
-            ext == "csv" || ext == "tsv" -> table(text, if (ext == "tsv") '\t' else ',')
+            ext == "csv" -> table(text, detectCsvDelimiter(text))
+            ext == "tsv" -> table(text, '\t')
             ext == "json" -> json(text)
             ext == "jsonl" || ext == "ndjson" -> jsonl(text)
             ext in setOf("html", "htm", "xhtml") -> html(text)
@@ -117,7 +121,7 @@ object ConverterEngine {
         )
         val head = runCatching {
             context.contentResolver.openInputStream(uri)?.use { input ->
-                val buffer = ByteArray(32)
+                val buffer = ByteArray(512)
                 var count = 0
                 while (count < buffer.size) {
                     val read = input.read(buffer, count, buffer.size - count)
@@ -155,8 +159,9 @@ object ConverterEngine {
                     else -> "mp4"
                 }
             }
-            ascii(0, 4) == "OggS" -> "ogg"
-            ascii(0, 3) == "ID3" || (head.size >= 2 && head[0] == 0xFF.toByte() && (head[1].toInt() and 0xE0) == 0xE0) -> "mp3"
+            ascii(0, 4) == "OggS" -> if (MediaSignatures.containsAscii(head, "OpusHead")) "opus" else "ogg"
+            MediaSignatures.isAdtsAac(head) -> "aac"
+            ascii(0, 3) == "ID3" || MediaSignatures.isMpegAudioFrame(head) -> "mp3"
             ascii(0, 4) == "fLaC" -> "flac"
             head.size >= 6 && ascii(0, 5) == "#!AMR" && head[5] == 0x0A.toByte() -> "amr"
             head.size >= 4 && head[0] == 0x1A.toByte() && head[1] == 0x45.toByte() && head[2] == 0xDF.toByte() && head[3] == 0xA3.toByte() ->
@@ -176,24 +181,44 @@ object ConverterEngine {
         val names = mutableSetOf<String>()
         var openDocumentMime: String? = null
         return runCatching {
+            var totalUncompressed = 0L
+            var entryCount = 0
             context.contentResolver.openInputStream(uri)?.use { raw ->
-                java.util.zip.ZipInputStream(raw).use { zip ->
+                ZipInputStream(raw).use { zip ->
                     while (true) {
                         val entry = zip.nextEntry ?: break
-                        names.add(entry.name)
-                        if (entry.name == "mimetype") {
-                            val output = ByteArrayOutputStream()
-                            val buffer = ByteArray(128)
-                            while (output.size() < 128) {
-                                val count = zip.read(buffer, 0, minOf(buffer.size, 128 - output.size()))
-                                if (count <= 0) break
-                                output.write(buffer, 0, count)
+                        entryCount++
+                        require(entryCount <= 10_000) { "Arsip memiliki terlalu banyak entri." }
+                        val captureMime = entry.name == "mimetype"
+                        var entryBytes = 0L
+                        val output = if (captureMime) ByteArrayOutputStream(128) else null
+                        val buffer = ByteArray(8192)
+                        while (true) {
+                            val count = zip.read(buffer)
+                            if (count < 0) break
+                            entryBytes += count
+                            totalUncompressed += count
+                            require(entryBytes <= 32L * 1024 * 1024) {
+                                "Satu entri arsip terlalu besar saat mendeteksi format."
                             }
-                            openDocumentMime = output.toString("UTF-8").trim()
+                            require(totalUncompressed <= 64L * 1024 * 1024) {
+                                "Data hasil dekompresi arsip terlalu besar saat mendeteksi format."
+                            }
+                            if (captureMime && output!!.size() < 128) {
+                                output.write(buffer, 0, minOf(count, 128 - output.size()))
+                            }
                         }
-                        if (names.contains("word/document.xml") || names.contains("xl/workbook.xml") ||
-                            names.contains("ppt/presentation.xml") || names.contains("META-INF/container.xml")) break
-                        zip.closeEntry()
+                        if (captureMime) openDocumentMime = output!!.toString("UTF-8").trim()
+                        if (entry.name in setOf(
+                                "word/document.xml",
+                                "xl/workbook.xml",
+                                "ppt/presentation.xml",
+                                "META-INF/container.xml"
+                            )
+                        ) {
+                            names.add(entry.name)
+                            break
+                        }
                     }
                 }
             }
@@ -232,23 +257,57 @@ object ConverterEngine {
     private fun json(value: String): String {
         val source = value.trim()
         require(source.isNotEmpty()) { "JSON kosong." }
-        val result = when (source.first()) {
-            '{' -> JSONObject(source).toString(2)
-            '[' -> JSONArray(source).toString(2)
-            else -> error("JSON harus berupa objek atau array.")
-        }
-        return fenced("json", result)
+        return fenced("json", prettyJsonValue(source))
     }
 
     private fun jsonl(value: String): String {
         val items = value.lineSequence().filter { it.isNotBlank() }.mapIndexed { i, line ->
-            runCatching {
-                val s = line.trim()
-                if (s.startsWith("{")) JSONObject(s).toString(2) else JSONArray(s).toString(2)
-            }.getOrElse { error("JSONL tidak valid pada baris ${i + 1}.") }
+            runCatching { prettyJsonValue(line.trim()) }
+                .getOrElse { error("JSONL tidak valid pada baris ${i + 1}.") }
         }.toList()
         require(items.isNotEmpty()) { "File JSONL kosong." }
-        return items.mapIndexed { i, item -> "### Record ${i + 1}\n\n${fenced("json", item)}" }.joinToString("\n\n")
+        return items.mapIndexed { i, item ->
+            "### Record ${i + 1}\n\n${fenced("json", item)}"
+        }.joinToString("\n\n")
+    }
+
+    private fun prettyJsonValue(source: String): String {
+        val parser = JSONTokener(source)
+        val parsed = parser.nextValue()
+        require(parser.nextClean() == '\u0000') { "Konten JSON memiliki karakter tambahan setelah nilai utama." }
+        return when (parsed) {
+            is JSONObject -> parsed.toString(2)
+            is JSONArray -> parsed.toString(2)
+            is String -> JSONObject.quote(parsed)
+            JSONObject.NULL -> "null"
+            is Number, is Boolean -> parsed.toString()
+            else -> error("Tipe nilai JSON tidak didukung.")
+        }
+    }
+
+    private fun detectCsvDelimiter(value: String): Char {
+        val sample = value.lineSequence().take(8).filter { it.isNotBlank() }.toList()
+        val candidates = listOf(',', ';', '\t', '|')
+        return candidates.maxByOrNull { delimiter ->
+            sample.sumOf { line -> countUnquotedDelimiter(line, delimiter) }
+        }?.takeIf { delimiter ->
+            sample.any { countUnquotedDelimiter(it, delimiter) > 0 }
+        } ?: ','
+    }
+
+    private fun countUnquotedDelimiter(line: String, delimiter: Char): Int {
+        var quoted = false
+        var count = 0
+        var index = 0
+        while (index < line.length) {
+            when {
+                line[index] == '"' && quoted && index + 1 < line.length && line[index + 1] == '"' -> index++
+                line[index] == '"' -> quoted = !quoted
+                line[index] == delimiter && !quoted -> count++
+            }
+            index++
+        }
+        return count
     }
 
     private fun table(value: String, delimiter: Char): String {
@@ -421,39 +480,42 @@ object ConverterEngine {
                 meta(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.let { out.appendLine("- Frame rate: " + it + " fps") }
                 out.appendLine()
                 out.appendLine("## Teks pada cuplikan video (OCR)")
-                val total = duration ?: 0L
-                val points = if (total > 0) listOf(total / 4, total / 2, total * 3 / 4) else listOf(-1L)
                 var found = false
-                val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-                try {
-                    points.distinct().forEachIndexed { index, ms ->
-                        val frame = runCatching {
-                            if (ms < 0) retriever.getFrameAtTime()
-                            else if (Build.VERSION.SDK_INT >= 27) {
-                                retriever.getScaledFrameAtTime(
+                if (Build.VERSION.SDK_INT < 27) {
+                    warnings.add("OCR cuplikan video memerlukan Android 8.1 (API 27) atau lebih baru; pengambilan frame resolusi penuh dilewati untuk menghindari lonjakan RAM.")
+                    out.appendLine("_OCR cuplikan video tidak dijalankan pada versi Android ini._")
+                } else {
+                    val total = duration ?: 0L
+                    val points = if (total > 0) listOf(total / 4, total / 2, total * 3 / 4) else listOf(-1L)
+                    val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                    try {
+                        points.distinct().forEachIndexed { index, ms ->
+                            val frame = runCatching {
+                                if (ms < 0) retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 1280, 1280)
+                                else retriever.getScaledFrameAtTime(
                                     ms * 1000,
                                     MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
                                     1280,
                                     1280
                                 )
-                            } else retriever.getFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                        }.getOrNull()
-                        if (frame != null) try {
-                            val text = runCatching { recognizeText(frame, recognizer) }
-                                .getOrElse { warnings.add("OCR cuplikan video gagal: " + (it.message ?: "tidak didukung") + "."); "" }
-                            if (text.isNotBlank()) {
-                                found = true
-                                out.appendLine("### Cuplikan " + (index + 1) + " — " +
-                                    if (ms < 0) "waktu tidak diketahui" else formatDuration(ms))
-                                out.appendLine(text)
-                                out.appendLine()
+                            }.getOrNull()
+                            if (frame != null) try {
+                                val text = runCatching { recognizeText(frame, recognizer) }
+                                    .getOrElse { warnings.add("OCR cuplikan video gagal: " + (it.message ?: "tidak didukung") + "."); "" }
+                                if (text.isNotBlank()) {
+                                    found = true
+                                    out.appendLine("### Cuplikan " + (index + 1) + " — " +
+                                        if (ms < 0) "waktu tidak diketahui" else formatDuration(ms))
+                                    out.appendLine(text)
+                                    out.appendLine()
+                                }
+                            } finally {
+                                frame.recycle()
                             }
-                        } finally {
-                            frame.recycle()
                         }
+                    } finally {
+                        recognizer.close()
                     }
-                } finally {
-                    recognizer.close()
                 }
                 if (!found) out.appendLine("_Tidak ditemukan teks pada cuplikan yang diperiksa._")
                 warnings.add("Video diperiksa pada maksimal tiga cuplikan; hasil OCR bukan transkrip dialog penuh atau subtitle.")
@@ -484,31 +546,88 @@ object ConverterEngine {
                 paragraphStart = "\n\n"
                 paragraphEnd = "\n"
             }
-            val result = stripper.getText(document).trim()
-            if (result.isBlank()) error("PDF tidak memiliki lapisan teks. PDF hasil pemindaian memerlukan OCR yang belum tersedia.")
-            if (document.numberOfPages > 300) warnings.add("PDF memiliki lebih dari 300 halaman; periksa kelengkapan hasil.")
-            return result
+            val textLayer = stripper.getText(document).trim()
+            if (textLayer.isNotBlank()) {
+                if (document.numberOfPages > 300) warnings.add("PDF memiliki lebih dari 300 halaman; periksa kelengkapan hasil.")
+                return textLayer
+            }
+
+            val pageCount = document.numberOfPages
+            require(pageCount > 0) { "PDF tidak memiliki halaman." }
+            val pageLimit = minOf(pageCount, MAX_PDF_OCR_PAGES)
+            val renderer = PDFRenderer(document)
+            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            val extracted = StringBuilder()
+            try {
+                for (pageIndex in 0 until pageLimit) {
+                    val bitmap = try {
+                        renderer.renderImage(pageIndex, 1.35f)
+                    } catch (error: Exception) {
+                        warnings.add("Halaman PDF ${pageIndex + 1} tidak dapat dirender untuk OCR: ${error.message ?: "kesalahan render"}.")
+                        null
+                    }
+                    if (bitmap != null) {
+                        try {
+                            val pageText = runCatching { recognizeText(bitmap, recognizer) }
+                                .getOrElse { error ->
+                                    warnings.add("OCR halaman PDF ${pageIndex + 1} gagal: ${error.message ?: "tidak didukung"}.")
+                                    ""
+                                }
+                            if (pageText.isNotBlank()) {
+                                extracted.append("## Halaman ").append(pageIndex + 1).append("\n\n")
+                                    .append(pageText).append("\n\n")
+                            }
+                        } finally {
+                            bitmap.recycle()
+                        }
+                    }
+                }
+            } finally {
+                recognizer.close()
+            }
+
+            if (pageCount > pageLimit) {
+                warnings.add("OCR PDF dibatasi hingga $pageLimit dari $pageCount halaman untuk menjaga memori dan waktu proses.")
+            }
+            require(extracted.isNotBlank()) {
+                "PDF tidak memiliki lapisan teks dan OCR tidak menemukan teks pada halaman yang diperiksa."
+            }
+            warnings.add("PDF hasil scan diproses dengan OCR lokal. Tata letak, tabel kompleks, dan urutan kolom dapat berbeda dari dokumen asli.")
+            return extracted.toString().trim()
         }
     }
 
     private fun docx(bytes: ByteArray, warnings: MutableList<String>): String {
-        require(bytes.size > 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4b.toByte()) { "DOCX tidak valid: arsip ZIP tidak ditemukan." }
+        require(bytes.size > 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4b.toByte()) {
+            "DOCX tidak valid: arsip ZIP tidak ditemukan."
+        }
         var xml: String? = null
+        var totalUncompressed = 0L
+        var entryCount = 0
         ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
-                if (entry.name == "word/document.xml") {
-                    val out = ByteArrayOutputStream()
-                    val buffer = ByteArray(8192)
-                    var size = 0
-                    while (true) {
-                        val n = zip.read(buffer)
-                        if (n < 0) break
-                        size += n
-                        require(size <= 20 * 1024 * 1024) { "Konten XML DOCX terlalu besar." }
-                        out.write(buffer, 0, n)
+                entryCount++
+                require(entryCount <= 10_000) { "DOCX memiliki terlalu banyak entri arsip." }
+                val isDocumentXml = entry.name == "word/document.xml"
+                val output = if (isDocumentXml) ByteArrayOutputStream() else null
+                var entrySize = 0L
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val count = zip.read(buffer)
+                    if (count < 0) break
+                    entrySize += count
+                    totalUncompressed += count
+                    require(entrySize <= if (isDocumentXml) 20L * 1024 * 1024 else 32L * 1024 * 1024) {
+                        "Konten arsip DOCX terlalu besar pada ${entry.name}."
                     }
-                    xml = out.toString("UTF-8")
+                    require(totalUncompressed <= 64L * 1024 * 1024) {
+                        "Total data hasil dekompresi DOCX melebihi 64 MB."
+                    }
+                    if (isDocumentXml) output!!.write(buffer, 0, count)
+                }
+                if (isDocumentXml) {
+                    xml = output!!.toString("UTF-8")
                     break
                 }
             }

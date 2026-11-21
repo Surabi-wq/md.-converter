@@ -1,6 +1,6 @@
 # Marka — File to Markdown
 
-Marka adalah aplikasi Android native untuk mengubah dokumen, teks, source code, gambar, audio, dan video menjadi dokumen Markdown (`.md`) secara lokal di perangkat. Beberapa file dari berbagai format dapat diproses dalam satu antrean, ditinjau per file, lalu digabungkan secara opsional menjadi satu dokumen dengan daftar isi.
+Marka 1.6.0 adalah aplikasi Android native untuk mengubah dokumen, teks, source code, gambar, audio, dan video menjadi dokumen Markdown (`.md`) secara lokal di perangkat. Beberapa file dari berbagai format dapat diproses dalam satu antrean, ditinjau per file, lalu digabungkan secara opsional menjadi satu dokumen dengan daftar isi.
 
 ## Alur penggunaan
 
@@ -59,17 +59,31 @@ Tombol ikon **?** di bagian atas aplikasi membuka panduan penggunaan dan daftar 
 
 Deteksi format menggunakan kombinasi signature file, MIME dari Android, dan ekstensi. Dukungan decoder media tetap bergantung pada Android dan codec yang tersedia pada perangkat.
 
-## Pemrosesan gambar, audio, dan video
+## Pemrosesan gambar, PDF scan, audio, dan video
 
 - Gambar didekode langsung dari stream dan menggunakan downsampling sebelum OCR; resolusi gambar asli dan ukuran file tetap dicatat jika metadata ukuran tersedia.
 - OCR gambar memakai ML Kit Text Recognition on-device dengan batas sisi hasil decode sekitar 2048 piksel untuk mengendalikan RAM.
-- Video dibaca melalui URI tanpa menyalin seluruh file ke RAM. OCR memakai hingga tiga cuplikan skala kecil pada titik waktu yang tersebar dan menggunakan satu recognizer untuk seluruh cuplikan.
+- PDF dengan lapisan teks diproses terlebih dahulu. Jika lapisan teks kosong, halaman dirender satu per satu dan diproses dengan OCR lokal hingga maksimal 50 halaman.
+- PDF scan yang lebih panjang akan diberi peringatan bahwa halaman di atas batas OCR tidak diproses. PDF kompleks atau berukuran besar masih dibatasi memori yang diperlukan PDFBox.
+- Video dibaca melalui URI tanpa menyalin seluruh file ke RAM. OCR memakai hingga tiga cuplikan skala kecil pada titik waktu yang tersebar dan menggunakan satu recognizer untuk seluruh cuplikan. Pada Android API 26, OCR frame dilewati agar tidak memuat frame penuh ke RAM.
 - Audio dibaca melalui decoder Android untuk mengekstrak metadata seperti durasi, judul, artis, album, genre, bitrate, dan jumlah track jika tersedia.
+- Signature AAC ADTS, frame MPEG audio, dan Opus pada Ogg dibedakan lebih baik. Dukungan codec tetap bergantung pada decoder Android perangkat.
 - Transkripsi ucapan/lirik audio belum tersedia. OCR video membaca teks yang terlihat pada cuplikan, bukan dialog atau subtitle lengkap.
+
+## Perbaikan stabilitas dan penggunaan memori pada 1.6.0
+
+- Isi Markdown tiap hasil disimpan sebagai cache sementara. Daftar hasil menyimpan metadata dan lokasi cache agar seluruh dokumen tidak terus berada di RAM.
+- Memulai batch baru tidak menghapus hasil terdahulu. Hasil dapat dibersihkan dengan tombol **Hapus hasil**.
+- Antrean dan status batch dikelola oleh `ViewModel`, sehingga pergantian orientasi layar tidak menghilangkan hasil yang sudah selesai.
+- Status proses menampilkan jumlah file yang telah selesai dan menyediakan tombol pembatalan. Pembatalan dilakukan pada batas aman antarfile; operasi parser yang sedang berjalan tidak selalu dapat dihentikan seketika.
+- Penggabungan Markdown hanya dihitung ketika diminta, bukan setiap kali daftar hasil berubah.
+- Pemindaian ZIP membatasi jumlah entri, ukuran entri, dan total data dekompresi termasuk entri yang dilewati.
+- CSV mencoba mendeteksi pemisah koma, titik koma, tab, dan pipe. JSON/JSONL kini menerima nilai primitif seperti string, angka, boolean, dan null.
+- Signature AAC ADTS, frame MPEG audio, dan Opus di dalam Ogg dibedakan lebih baik.
 
 ## Batasan yang diketahui
 
-- PDF hasil scan yang hanya berisi gambar belum menjalani OCR.
+- PDF berbasis teks diproses seperti biasa. PDF scan yang hanya berisi gambar kini menjalani OCR lokal hingga maksimal 50 halaman; halaman lebih lanjut tidak diproses dan akan diberi peringatan.
 - DOC, XLS, dan PPT biner versi lama belum didukung.
 - XLSX menampilkan nilai sel yang tersimpan; rumus tidak dihitung ulang. Format sel, grafik, dan tata letak spreadsheet tidak dipertahankan.
 - PPTX mengekstrak teks per slide; gambar, animasi, catatan pembicara, dan layout tidak dipertahankan.
@@ -78,7 +92,8 @@ Deteksi format menggunakan kombinasi signature file, MIME dari Android, dan ekst
 - DOCX mengambil paragraf dan heading dasar; tabel kompleks, gambar, catatan kaki, header/footer, dan tata letak belum dipertahankan.
 - OCR bahasa/aksara tertentu, tulisan tangan, gambar buram, atau teks yang sangat kecil dapat keliru atau tidak terdeteksi.
 - Audio dan video yang codec-nya tidak didukung decoder perangkat hanya menghasilkan laporan dasar dengan peringatan.
-- Batas ukuran file dokumen/arsip yang dibaca ke buffer adalah 64 MB. Konten teks arsip memiliki batas dekompresi total 40 MB dan batas 12 MB per entri XML. Gambar diproses dengan stream; audio/video menggunakan URI/metadata tanpa menyalin seluruh media ke RAM.
+- Batas ukuran file dokumen/arsip yang dibaca ke buffer adalah 64 MB. Pembaca arsip membatasi konten teks terpilih hingga 40 MB, entri terpilih hingga 12 MB, entri lain hingga 32 MB, dan total hasil dekompresi arsip hingga 80 MB. DOCX dan pendeteksian jenis arsip memiliki batas dekompresi tersendiri. Gambar diproses dengan stream; audio/video menggunakan URI/metadata tanpa menyalin seluruh media ke RAM.
+- Hasil konversi disimpan di direktori cache aplikasi. Android dapat menghapus cache ketika ruang penyimpanan rendah; ekspor otomatis ke folder keluaran merupakan pilihan paling aman untuk hasil penting.
 - Selalu tinjau hasil Markdown sebelum digunakan lebih lanjut. Konversi tidak menjamin format identik dengan tampilan dokumen asli.
 
 ## Privasi dan penyimpanan

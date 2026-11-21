@@ -30,7 +30,8 @@ internal object MarkdownMerger {
                     appendLine("### Catatan konversi")
                     item.warnings.forEach { appendLine("- $it") }
                 }
-                val body = item.markdown.substringAfter("\n\n", item.markdown).trim()
+                val markdown = item.readMarkdown()
+                val body = markdown.substringAfter("\n\n", markdown).trim()
                 appendLine()
                 appendLine(body.ifBlank { "_Tidak ada konten teks yang dapat ditampilkan._" })
                 appendLine()
