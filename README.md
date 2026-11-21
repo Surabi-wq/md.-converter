@@ -1,5 +1,17 @@
 # Marka — File to Markdown
 
+## Pembaruan 1.6.0
+
+- Hasil batch sebelumnya tetap dipertahankan ketika batch baru dijalankan; hasil otomatis disimpan hanya untuk batch yang baru selesai.
+- Penggabungan Markdown dilakukan hanya saat pengguna meminta pratinjau atau ekspor, sehingga tidak dihitung ulang pada setiap perubahan daftar hasil.
+- Proses batch mendukung pembatalan aman setelah file aktif selesai, dengan indikator progres.
+- Marka dapat menerima satu atau beberapa file dari menu Share aplikasi Android lain.
+- CSV mencoba mendeteksi pemisah koma atau titik koma; JSON/JSONL juga menerima nilai primitif.
+- Heading HTML mempertahankan tingkat heading H1 sampai H6.
+- Perbaikan deteksi AAC ADTS dan Ogg Opus serta downsampling frame video pada perangkat Android lama.
+- Pembacaan ZIP dan DOCX membatasi jumlah entri dan total data hasil dekompresi untuk mengurangi risiko arsip berukuran ekstrem.
+
+
 Marka adalah aplikasi Android native untuk mengubah dokumen, teks, source code, gambar, audio, dan video menjadi dokumen Markdown (`.md`) secara lokal di perangkat. Beberapa file dari berbagai format dapat diproses dalam satu antrean, ditinjau per file, lalu digabungkan secara opsional menjadi satu dokumen dengan daftar isi.
 
 ## Alur penggunaan
@@ -78,7 +90,7 @@ Deteksi format menggunakan kombinasi signature file, MIME dari Android, dan ekst
 - DOCX mengambil paragraf dan heading dasar; tabel kompleks, gambar, catatan kaki, header/footer, dan tata letak belum dipertahankan.
 - OCR bahasa/aksara tertentu, tulisan tangan, gambar buram, atau teks yang sangat kecil dapat keliru atau tidak terdeteksi.
 - Audio dan video yang codec-nya tidak didukung decoder perangkat hanya menghasilkan laporan dasar dengan peringatan.
-- Batas ukuran file dokumen/arsip yang dibaca ke buffer adalah 64 MB. Konten teks arsip memiliki batas dekompresi total 40 MB dan batas 12 MB per entri XML. Gambar diproses dengan stream; audio/video menggunakan URI/metadata tanpa menyalin seluruh media ke RAM.
+- Batas ukuran file dokumen/arsip yang dibaca ke buffer adalah 64 MB. Konten teks yang dipilih dari arsip dibatasi 40 MB total dan 12 MB per entri (DOCX memakai batas XML 20 MB); seluruh data hasil dekompresi arsip dibatasi 128 MB dan maksimal 5.000 entri. Gambar diproses dengan stream; audio/video menggunakan URI/metadata tanpa menyalin seluruh media ke RAM.
 - Selalu tinjau hasil Markdown sebelum digunakan lebih lanjut. Konversi tidak menjamin format identik dengan tampilan dokumen asli.
 
 ## Privasi dan penyimpanan
