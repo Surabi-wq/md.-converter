@@ -57,7 +57,7 @@ class MainActivity : ComponentActivity() {
         var pendingMarkdown by remember { mutableStateOf<String?>(null) }
         var pendingName by remember { mutableStateOf("hasil-konversi.md") }
         val selectedUris = remember { mutableStateListOf<Uri>() }
-        var outputFolder by remember { mutableStateOf(getSharedPreferences("settings", MODE_PRIVATE).getString("output_tree", null)?.let(Uri::parse)) }
+        var outputFolder by remember { mutableStateOf(getSharedPreferences("settings", MODE_PRIVATE).getString("output_tree", null)?.let { Uri.parse(it) }) }
         val successfulCount = files.count { it.error == null }
         val combined = remember(files.toList()) { files.filter { it.error == null }.takeIf { it.isNotEmpty() }?.let(::combineMarkdown).orEmpty() }
 
