@@ -16,6 +16,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -237,7 +240,7 @@ class MainActivity : ComponentActivity() {
                         },
                         actions = {
                             IconButton(onClick = { showHelp = true }) {
-                                Icon(Icons.Default.HelpOutline, contentDescription = "Panduan penggunaan Marka")
+                                Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "Panduan penggunaan Marka")
                             }
                         }
                     )
@@ -282,14 +285,15 @@ class MainActivity : ComponentActivity() {
                                     Text("File terpilih (${selectedUris.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF315F55))
                                     selectedUris.take(4).forEach { uri ->
                                         val displayName by produceState(initialValue = "Memuat nama file…", key1 = uri) {
-                                            value = withContext(Dispatchers.IO) {
+                                            val resolvedName = withContext(Dispatchers.IO) {
                                                 runCatching { DocumentStorage.queryName(this@MainActivity, uri) }
                                                     .getOrDefault("File terpilih")
                                             }
+                                            value = resolvedName
                                         }
                                         Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFFF1F5F2)) {
                                             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(Icons.Default.InsertDriveFile, null, tint = Color(0xFF315F55), modifier = Modifier.size(20.dp))
+                                                Icon(Icons.AutoMirrored.Filled.InsertDriveFile, null, tint = Color(0xFF315F55), modifier = Modifier.size(20.dp))
                                                 Spacer(Modifier.width(8.dp))
                                                 Text(displayName.take(48), fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                                                 IconButton(onClick = {
@@ -395,7 +399,7 @@ class MainActivity : ComponentActivity() {
                                     enabled = !busy && successfulCount >= 2,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Icon(Icons.Default.MergeType, null)
+                                    Icon(Icons.AutoMirrored.Filled.MergeType, null)
                                     Spacer(Modifier.width(8.dp))
                                     Text("3. Gabungkan & simpan satu file .md")
                                 }
