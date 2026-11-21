@@ -33,7 +33,7 @@ Setiap push ke branch `main` menjalankan GitHub Actions. Artifact debug bernama 
 - Video belum ditranskripsikan menjadi dialog; OCR hanya membaca teks yang terlihat pada beberapa frame, bukan subtitle penuh.
 - DOC biner, XLS/XLSX, PPT/PPTX, ODT/ODS/ODP, dan EPUB belum didukung.
 - Ekstraksi PDF/DOCX dapat berbeda dari tata letak asli. Selalu periksa preview sebelum menyimpan.
-- Batas ukuran input yang dibaca ke buffer untuk dokumen dan gambar adalah 100 MB; audio/video diproses melalui URI dan metadata tanpa menyalin seluruh file ke RAM. Ketersediaan memori perangkat dan kemampuan decoder Android tetap dapat membatasi file yang sangat besar.
+- Batas ukuran input yang dibaca ke buffer untuk dokumen dan gambar adalah 64 MB; audio/video diproses melalui URI dan metadata tanpa menyalin seluruh file ke RAM. Ketersediaan memori perangkat dan kemampuan decoder Android tetap dapat membatasi file yang sangat besar.
 
 ## Alur penggunaan terbaru\n- Pilih beberapa dokumen/media.\n- Tekan satu tombol **Konfirmasi & mulai konversi** untuk memulai antrean.\n- Pilih folder keluaran satu kali melalui Android Storage Access Framework. Izin folder disimpan, sehingga dokumen gabungan berikutnya ditulis otomatis ke folder tersebut tanpa pemilih lokasi berulang.\n- Jika folder belum dipilih, hasil tetap dapat diekspor melalui pemilih penyimpanan Android.\n- Build APK mengaktifkan R8 dan resource shrinking untuk mengurangi kode/resource yang tidak dipakai.\n\n## Teknologi
 Kotlin, Jetpack Compose, Android Storage Access Framework, Android JSON/XML APIs, PDFBox-Android 2.0.27.0, ML Kit Text Recognition 16.0.1. AGP 8.7.3, Kotlin 2.0.21, Gradle 8.9, JDK 17.
