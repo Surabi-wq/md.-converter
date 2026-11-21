@@ -460,29 +460,28 @@ object ConverterEngine {
                 try {
                     points.distinct().forEachIndexed { index, ms ->
                         val frame = runCatching {
-                            if (ms < 0) retriever.getFrameAtTime()
-                            else if (Build.VERSION.SDK_INT >= 27) {
-                                retriever.getScaledFrameAtTime(
+                            val source = when {
+                                ms < 0 -> retriever.getFrameAtTime()
+                                Build.VERSION.SDK_INT >= 27 -> retriever.getScaledFrameAtTime(
                                     ms * 1000,
                                     MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
                                     1280,
                                     1280
                                 )
-                            } else {
-                                val source = retriever.getFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                                if (source == null) null else {
-                                    val maxSide = maxOf(source.width, source.height)
-                                    if (maxSide <= 1280) source else {
-                                        val ratio = 1280f / maxSide.toFloat()
-                                        val scaled = Bitmap.createScaledBitmap(
-                                            source,
-                                            (source.width * ratio).toInt().coerceAtLeast(1),
-                                            (source.height * ratio).toInt().coerceAtLeast(1),
-                                            true
-                                        )
-                                        source.recycle()
-                                        scaled
-                                    }
+                                else -> retriever.getFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                            }
+                            if (source == null) null else {
+                                val maxSide = maxOf(source.width, source.height)
+                                if (maxSide <= 1280) source else {
+                                    val ratio = 1280f / maxSide.toFloat()
+                                    val scaled = Bitmap.createScaledBitmap(
+                                        source,
+                                        (source.width * ratio).toInt().coerceAtLeast(1),
+                                        (source.height * ratio).toInt().coerceAtLeast(1),
+                                        true
+                                    )
+                                    source.recycle()
+                                    scaled
                                 }
                             }
                         }.getOrNull()
