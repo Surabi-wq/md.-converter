@@ -228,7 +228,8 @@ class MainActivity : ComponentActivity() {
                                     fontSize = 12.sp
                                 )
                                 Text(
-                                    "Nama file gabungan: " + MarkdownFileNames.merged(files.filter { it.error == null }.map { it.name }),
+                                    if (successfulCount == 0) "Nama file gabungan: belum tersedia"
+                                    else "Nama file gabungan: " + MarkdownFileNames.merged(files.filter { it.error == null }.map { it.name }),
                                     color = Color(0xFF315F55),
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold
@@ -255,7 +256,7 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                     },
-                                    enabled = !busy && successfulCount > 0,
+                                    enabled = !busy && successfulCount >= 2,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Icon(Icons.Default.MergeType, null)
@@ -274,11 +275,12 @@ class MainActivity : ComponentActivity() {
                                             null
                                         )
                                     },
-                                    enabled = !busy && successfulCount > 0,
+                                    enabled = !busy && successfulCount >= 2,
                                     modifier = Modifier.fillMaxWidth()
                                 ) { Text("Lihat pratinjau hasil gabungan") }
                                 Text(
-                                    "Konversi satu per satu tetap tersimpan terpisah. Penggabungan adalah langkah opsional.",
+                                    if (successfulCount < 2) "Pilih dan konversi minimal dua file untuk mengaktifkan penggabungan. Hasil tiap file tetap dapat disimpan sendiri."
+                                    else "Konversi satu per satu tetap tersimpan terpisah. Penggabungan adalah langkah opsional.",
                                     color = Color.Gray,
                                     fontSize = 11.sp
                                 )
