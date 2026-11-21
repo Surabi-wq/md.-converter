@@ -135,6 +135,8 @@ class MainActivity : ComponentActivity() {
         var preview by remember { mutableStateOf<ConvertedFile?>(null) }
         var showHelp by remember { mutableStateOf(false) }
         var pendingMarkdown by remember { mutableStateOf<String?>(null) }
+        var pendingFile by remember { mutableStateOf<ConvertedFile?>(null) }
+        var pendingMergeFiles by remember { mutableStateOf<List<ConvertedFile>?>(null) }
         var pendingName by remember { mutableStateOf("hasil.md") }
         val selectedUris = conversionViewModel.selectedUris
         var outputFolder by remember { mutableStateOf(DocumentStorage.loadOutputFolder(this@MainActivity)) }
@@ -180,22 +182,35 @@ class MainActivity : ComponentActivity() {
         }
         val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
             val markdown = pendingMarkdown
-            if (uri != null && markdown != null) {
+            val sourceFile = pendingFile
+            val mergeFiles = pendingMergeFiles
+            if (uri != null && (markdown != null || sourceFile != null || mergeFiles != null)) {
                 lifecycleScope.launch {
                     try {
                         withContext(Dispatchers.IO) {
-                            (contentResolver.openOutputStream(uri, "wt") ?: error("Lokasi penyimpanan tidak dapat dibuka."))
-                                .bufferedWriter(Charsets.UTF_8).use { it.write(markdown) }
+                            val output = contentResolver.openOutputStream(uri, "wt")
+                                ?: error("Lokasi penyimpanan tidak dapat dibuka.")
+                            output.bufferedWriter(Charsets.UTF_8).use { writer ->
+                                when {
+                                    sourceFile != null -> sourceFile.writeMarkdownTo(writer)
+                                    mergeFiles != null -> MarkdownMerger.writeTo(mergeFiles, writer)
+                                    markdown != null -> writer.write(markdown)
+                                }
+                            }
                         }
                         message = "Markdown berhasil disimpan."
                     } catch (e: Exception) {
                         message = "Gagal menyimpan: ${e.message ?: "kesalahan tidak diketahui"}"
                     } finally {
                         pendingMarkdown = null
+                        pendingFile = null
+                        pendingMergeFiles = null
                     }
                 }
             } else {
                 pendingMarkdown = null
+                pendingFile = null
+                pendingMergeFiles = null
             }
         }
 
@@ -352,12 +367,14 @@ class MainActivity : ComponentActivity() {
                                             try {
                                                 val markdown = withContext(Dispatchers.IO) { combineMarkdown(successful) }
                                                 if (folder == null) {
-                                                    pendingMarkdown = markdown
+                                                    pendingMarkdown = null
+                                                    pendingFile = null
+                                                    pendingMergeFiles = successful
                                                     pendingName = documentName
                                                     saver.launch(documentName)
                                                 } else {
                                                     val savedName = withContext(Dispatchers.IO) {
-                                                        DocumentStorage.saveToFolder(this@MainActivity, folder, documentName, markdown)
+                                                        DocumentStorage.saveMergedToFolder(this@MainActivity, folder, documentName, successful)
                                                     }
                                                     message = "Dokumen gabungan berhasil disimpan sebagai " + savedName
                                                 }
@@ -378,6 +395,9 @@ class MainActivity : ComponentActivity() {
                                         val successful = files.filter { it.error == null }
                                         mergeScope.launch {
                                             try {
+                                                require(MarkdownMerger.estimatedSourceBytes(successful) <= 8L * 1024 * 1024) {
+                                                    "Isi gabungan terlalu besar untuk pratinjau dalam memori. Gunakan tombol Gabungkan & simpan agar hasil ditulis langsung ke penyimpanan."
+                                                }
                                                 val markdown = withContext(Dispatchers.IO) { combineMarkdown(successful) }
                                                 preview = ConvertedFile(
                                                     -1L,
@@ -440,7 +460,9 @@ class MainActivity : ComponentActivity() {
                                         onClick = {
                                             mergeScope.launch {
                                                 try {
-                                                    pendingMarkdown = withContext(Dispatchers.IO) { file.readMarkdown() }
+                                                    pendingMarkdown = null
+                                                    pendingMergeFiles = null
+                                                    pendingFile = file
                                                     pendingName = MarkdownFileNames.fromSource(file.name)
                                                     saver.launch(pendingName)
                                                 } catch (error: Exception) {
@@ -564,6 +586,8 @@ class MainActivity : ComponentActivity() {
                     confirmButton = {
                         TextButton(onClick = {
                             pendingMarkdown = item.markdown
+                            pendingFile = null
+                            pendingMergeFiles = null
                             pendingName = MarkdownFileNames.fromSource(item.name)
                             saver.launch(pendingName)
                         }) { Text("Ekspor .md") }
