@@ -119,7 +119,7 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         actions = {
-                            IconButton(onClick = { showHelp = true }, enabled = !busy) {
+                            IconButton(onClick = { showHelp = true }) {
                                 Icon(Icons.Default.HelpOutline, contentDescription = "Panduan penggunaan Marka")
                             }
                         }
@@ -184,7 +184,17 @@ class MainActivity : ComponentActivity() {
                                 OutlinedButton(onClick = { folderPicker.launch(outputFolder) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                                     Icon(Icons.Default.Folder, null); Spacer(Modifier.width(8.dp)); Text(if (outputFolder == null) "Pilih folder keluaran" else "Ganti folder keluaran")
                                 }
-                                Text(if (outputFolder == null) "Folder belum dipilih. Hasil dapat disimpan manual." else "Hasil gabungan akan disimpan otomatis ke folder pilihan.", fontSize = 12.sp, color = Color.Gray)
+                                Text(
+                                    if (outputFolder == null) "Folder belum dipilih. Hasil dapat diekspor saat proses selesai."
+                                    else "Hasil tiap file disimpan otomatis di folder ini. Dokumen gabungan dibuat terpisah melalui tombol 3.",
+                                    fontSize = 12.sp,
+                                    color = Color.Gray
+                                )
+                                Text(
+                                    "Nama hasil mengikuti nama file asli; hanya ekstensinya yang berubah menjadi .md.",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray
+                                )
                             }
                         }
                     }
