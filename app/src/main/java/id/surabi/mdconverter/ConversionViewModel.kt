@@ -23,6 +23,7 @@ import java.util.UUID
  */
 internal class ConversionViewModel : ViewModel() {
     val files = mutableStateListOf<ConvertedFile>()
+    val selectedUris = mutableStateListOf<Uri>()
 
     var busy by mutableStateOf(false)
         private set
