@@ -126,8 +126,8 @@ object ConverterEngine {
                 }
                 buffer.copyOf(count)
             }
-        }.getOrNull().orEmpty()
-        fun ascii(start: Int, length: Int) =
+        }.getOrNull() ?: ByteArray(0)
+        fun ascii(start: Int, length: Int): String =
             if (head.size >= start + length) String(head, start, length, Charsets.US_ASCII) else ""
         val signature = when {
             head.size >= 5 && ascii(0, 5) == "%PDF-" -> "pdf"
