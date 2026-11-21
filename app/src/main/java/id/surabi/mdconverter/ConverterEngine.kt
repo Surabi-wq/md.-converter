@@ -32,6 +32,8 @@ data class ConversionResult(val markdown: String, val format: String, val warnin
 object ConverterEngine {
     private const val MAX_BYTES = 64L * 1024 * 1024
     private const val MAX_PDF_OCR_PAGES = 50
+    private const val MAX_PDF_PAGES = 1000
+    private const val MIN_TEXT_LAYER_CHARS_BEFORE_OCR = 24
     private val imageTypes = SupportedFormats.imageTypes
     private val audioTypes = SupportedFormats.audioTypes
     private val videoTypes = SupportedFormats.videoTypes
@@ -539,6 +541,9 @@ object ConverterEngine {
     private fun pdf(bytes: ByteArray, warnings: MutableList<String>): String {
         PDDocument.load(bytes).use { document ->
             require(!document.isEncrypted) { "PDF terenkripsi atau dilindungi kata sandi." }
+            val pageCount = document.numberOfPages
+            require(pageCount > 0) { "PDF tidak memiliki halaman." }
+
             val stripper = PDFTextStripper().apply {
                 sortByPosition = true
                 addMoreFormatting = true
@@ -546,53 +551,81 @@ object ConverterEngine {
                 paragraphStart = "\n\n"
                 paragraphEnd = "\n"
             }
-            val textLayer = stripper.getText(document).trim()
-            if (textLayer.isNotBlank()) {
-                if (document.numberOfPages > 300) warnings.add("PDF memiliki lebih dari 300 halaman; periksa kelengkapan hasil.")
-                return textLayer
-            }
-
-            val pageCount = document.numberOfPages
-            require(pageCount > 0) { "PDF tidak memiliki halaman." }
-            val pageLimit = minOf(pageCount, MAX_PDF_OCR_PAGES)
             val renderer = PDFRenderer(document)
-            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
             val extracted = StringBuilder()
+            var recognizer: TextRecognizer? = null
+            var ocrPagesAttempted = 0
+            var ocrPagesSkipped = 0
+            val pageLimit = minOf(pageCount, MAX_PDF_PAGES)
+
             try {
                 for (pageIndex in 0 until pageLimit) {
-                    val bitmap = try {
-                        renderer.renderImage(pageIndex, 1.35f)
-                    } catch (error: Exception) {
-                        warnings.add("Halaman PDF ${pageIndex + 1} tidak dapat dirender untuk OCR: ${error.message ?: "kesalahan render"}.")
-                        null
-                    }
-                    if (bitmap != null) {
-                        try {
-                            val pageText = runCatching { recognizeText(bitmap, recognizer) }
-                                .getOrElse { error ->
-                                    warnings.add("OCR halaman PDF ${pageIndex + 1} gagal: ${error.message ?: "tidak didukung"}.")
-                                    ""
-                                }
-                            if (pageText.isNotBlank()) {
-                                extracted.append("## Halaman ").append(pageIndex + 1).append("\n\n")
-                                    .append(pageText).append("\n\n")
-                            }
-                        } finally {
-                            bitmap.recycle()
+                    stripper.startPage = pageIndex + 1
+                    stripper.endPage = pageIndex + 1
+                    val pageText = runCatching { stripper.getText(document).trim() }
+                        .getOrElse { error ->
+                            warnings.add("Teks halaman PDF " + (pageIndex + 1) + " tidak dapat diekstrak: " +
+                                (error.message ?: "kesalahan baca") + ".")
+                            ""
                         }
+
+                    if (pageText.isNotBlank()) extracted.append(pageText).append("\n\n")
+
+                    // Also OCR short fragments: mixed PDFs often have only a selectable page number or header.
+                    if (pageText.length >= MIN_TEXT_LAYER_CHARS_BEFORE_OCR) continue
+                    if (ocrPagesAttempted >= MAX_PDF_OCR_PAGES) {
+                        ocrPagesSkipped++
+                        continue
+                    }
+                    ocrPagesAttempted++
+
+                    val cropBox = document.getPage(pageIndex).cropBox
+                    val scale = PdfPageSizing.renderScale(cropBox.width, cropBox.height)
+                    val bitmap = try {
+                        renderer.renderImage(pageIndex, scale)
+                    } catch (error: Exception) {
+                        warnings.add("Halaman PDF " + (pageIndex + 1) + " tidak dapat dirender untuk OCR: " +
+                            (error.message ?: "kesalahan render") + ".")
+                        null
+                    } ?: continue
+
+                    try {
+                        if (recognizer == null) {
+                            recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                        }
+                        val ocrText = runCatching { recognizeText(bitmap, recognizer) }
+                            .getOrElse { error ->
+                                warnings.add("OCR halaman PDF " + (pageIndex + 1) + " gagal: " +
+                                    (error.message ?: "tidak didukung") + ".")
+                                ""
+                            }
+                        if (ocrText.isNotBlank()) {
+                            extracted.append("### Teks OCR halaman ").append(pageIndex + 1).append("\n\n")
+                                .append(ocrText).append("\n\n")
+                        }
+                    } finally {
+                        bitmap.recycle()
                     }
                 }
             } finally {
-                recognizer.close()
+                recognizer?.close()
             }
 
             if (pageCount > pageLimit) {
-                warnings.add("OCR PDF dibatasi hingga $pageLimit dari $pageCount halaman untuk menjaga memori dan waktu proses.")
+                warnings.add("PDF memiliki " + pageCount + " halaman; hanya " + pageLimit +
+                    " halaman pertama yang diproses untuk menjaga waktu dan memori.")
             }
+            if (ocrPagesSkipped > 0) {
+                warnings.add("OCR PDF dibatasi hingga " + MAX_PDF_OCR_PAGES + " halaman yang memerlukan OCR; " +
+                    ocrPagesSkipped + " halaman tambahan tidak menjalani OCR.")
+            }
+            if (ocrPagesAttempted > 0) {
+                warnings.add("PDF scan atau halaman campuran diproses dengan OCR lokal. Tata letak, tabel kompleks, dan urutan kolom dapat berbeda dari dokumen asli.")
+            }
+
             require(extracted.isNotBlank()) {
-                "PDF tidak memiliki lapisan teks dan OCR tidak menemukan teks pada halaman yang diperiksa."
+                "PDF tidak memiliki teks yang dapat diekstrak dan OCR tidak menemukan teks pada halaman yang diperiksa."
             }
-            warnings.add("PDF hasil scan diproses dengan OCR lokal. Tata letak, tabel kompleks, dan urutan kolom dapat berbeda dari dokumen asli.")
             return extracted.toString().trim()
         }
     }
