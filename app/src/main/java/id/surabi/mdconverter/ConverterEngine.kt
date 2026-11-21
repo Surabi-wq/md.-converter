@@ -668,6 +668,7 @@ object ConverterEngine {
         val source = xml ?: error("DOCX tidak valid: document.xml tidak ditemukan.")
         val parser = Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
+        runCatching { parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) }
         parser.setInput(source.reader())
         val result = StringBuilder()
         var paragraph = StringBuilder()
