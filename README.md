@@ -81,7 +81,7 @@ Deteksi format menggunakan kombinasi signature file, MIME dari Android, dan ekst
 
 ## Batasan yang diketahui
 
-- PDF hasil scan yang hanya berisi gambar belum menjalani OCR.
+- PDF hasil scan kini memiliki OCR fallback sampai 30 halaman pertama jika tidak memiliki lapisan teks. Dokumen PDF campuran teks dan scan masih dapat memerlukan pemeriksaan manual.
 - DOC, XLS, dan PPT biner versi lama belum didukung.
 - XLSX menampilkan nilai sel yang tersimpan; rumus tidak dihitung ulang. Format sel, grafik, dan tata letak spreadsheet tidak dipertahankan.
 - PPTX mengekstrak teks per slide; gambar, animasi, catatan pembicara, dan layout tidak dipertahankan.
