@@ -11,6 +11,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -68,8 +70,8 @@ class MainActivity : ComponentActivity() {
                 lifecycleScope.launch {
                     try {
                         withContext(Dispatchers.IO) {
-                            contentResolver.openOutputStream(uri)?.bufferedWriter(Charsets.UTF_8)?.use { it.write(markdown) }
-                                ?: error("Lokasi penyimpanan tidak dapat dibuka.")
+                            (contentResolver.openOutputStream(uri, "wt") ?: error("Lokasi penyimpanan tidak dapat dibuka."))
+                                .bufferedWriter(Charsets.UTF_8).use { it.write(markdown) }
                         }
                         message = "Markdown berhasil disimpan."
                     } catch (e: Exception) {
@@ -106,11 +108,11 @@ class MainActivity : ComponentActivity() {
                     item {
                         Card(
                             Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(22.dp),
+                            shape = RoundedCornerShape(14.dp),
                             colors = CardDefaults.cardColors(containerColor = Color(0xFFE3EEE9))
                         ) {
-                            Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text("Konversi dan gabungkan file ke Markdown", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = Color(0xFF183D36))
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                                Text("Konversi dan gabungkan file ke Markdown", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = Color(0xFF183D36))
                                 Text(
                                     "Pilih berbagai jenis file sekaligus. Setiap hasil akan menjadi bagian tersendiri dalam satu dokumen Markdown.",
                                     color = Color(0xFF49635D)
@@ -194,7 +196,7 @@ class MainActivity : ComponentActivity() {
                                     Icon(Icons.Default.InsertDriveFile, null, tint = Color(0xFF315F55))
                                     Spacer(Modifier.width(9.dp))
                                     Column(Modifier.weight(1f)) {
-                                        Text(file.name, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                        Text(file.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                                         Text(
                                             file.format.uppercase() + " • " + if (file.error == null) "Selesai" else "Gagal",
                                             fontSize = 12.sp,
@@ -247,7 +249,7 @@ class MainActivity : ComponentActivity() {
                     onDismissRequest = { preview = null },
                     title = { Text(if (item.id == -1L) "Preview Markdown Gabungan" else "Preview Markdown") },
                     text = {
-                        Column(Modifier.heightIn(max = 420.dp)) {
+                        Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
                             Text(item.name, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(8.dp))
                             Text(item.markdown, fontSize = 12.sp)
