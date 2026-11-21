@@ -454,7 +454,7 @@ class MainActivity : ComponentActivity() {
                             }
                             HorizontalDivider()
                             Text("Batasan penting", fontWeight = FontWeight.Bold, color = Color(0xFF315F55))
-                            Text("Format DOC, XLS, dan PPT lama belum didukung. PDF hasil scan belum menjalani OCR. Audio belum ditranskripsikan menjadi ucapan/lirik; OCR video hanya membaca teks pada cuplikan, bukan dialog.", fontSize = 12.sp)
+                            Text("Format DOC, XLS, dan PPT lama belum didukung. PDF hasil scan dapat diproses dengan OCR terbatas sampai 30 halaman pertama. Audio belum ditranskripsikan menjadi ucapan/lirik; OCR video hanya membaca teks pada cuplikan, bukan dialog.", fontSize = 12.sp)
                             Text(UsageGuide.privacy, fontSize = 12.sp, color = Color.Gray)
                         }
                     },
