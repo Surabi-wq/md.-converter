@@ -1,6 +1,7 @@
 package id.surabi.mdconverter
 
 import android.net.Uri
+import android.content.Intent
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -48,10 +49,33 @@ data class ConvertedFile(
 }
 
 class MainActivity : ComponentActivity() {
+    private var incomingSharedUris by mutableStateOf<List<Uri>>(emptyList())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        incomingSharedUris = extractSharedUris(intent)
         PDFBoxResourceLoader.init(applicationContext)
         setContent { Screen() }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        incomingSharedUris = extractSharedUris(intent)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun extractSharedUris(source: Intent?): List<Uri> {
+        if (source == null) return emptyList()
+        val fromExtra = when (source.action) {
+            Intent.ACTION_SEND -> listOfNotNull(source.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+            Intent.ACTION_SEND_MULTIPLE -> source.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+            else -> emptyList()
+        }
+        val fromClip = source.clipData?.let { clip ->
+            (0 until clip.itemCount).mapNotNull { index -> clip.getItemAt(index).uri }
+        }.orEmpty()
+        return (fromExtra + fromClip + listOfNotNull(source.data)).distinct()
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -59,10 +83,27 @@ class MainActivity : ComponentActivity() {
     private fun Screen() {
         val conversionViewModel: ConversionViewModel = viewModel()
         LaunchedEffect(conversionViewModel) {
-            conversionViewModel.cleanupOrphanedCacheFiles(cacheDir)
+            conversionViewModel.initialize(applicationContext)
+        }
+        LaunchedEffect(incomingSharedUris) {
+            val shared = incomingSharedUris
+            if (shared.isNotEmpty()) {
+                val existing = selectedUris.map { it.toString() }.toHashSet()
+                val fresh = shared.filter { existing.add(it.toString()) }
+                fresh.forEach { uri ->
+                    runCatching {
+                        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                }
+                selectedUris.addAll(fresh)
+                message = if (fresh.isEmpty()) "File yang dibagikan sudah ada di antrean."
+                    else "${fresh.size} file diterima melalui Share Android."
+                incomingSharedUris = emptyList()
+            }
         }
         val files = conversionViewModel.files
         val busy = conversionViewModel.busy
+        val historyReady = conversionViewModel.historyReady
         var message by remember { mutableStateOf(conversionViewModel.message) }
         LaunchedEffect(conversionViewModel.message) { message = conversionViewModel.message }
         var preview by remember { mutableStateOf<ConvertedFile?>(null) }
@@ -78,6 +119,11 @@ class MainActivity : ComponentActivity() {
             if (uris.isNotEmpty() && !busy) {
                 val existing = selectedUris.map { it.toString() }.toHashSet()
                 val fresh = uris.filter { existing.add(it.toString()) }
+                fresh.forEach { uri ->
+                    runCatching {
+                        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                }
                 selectedUris.addAll(fresh)
                 message = if (fresh.isEmpty()) "File yang dipilih sudah ada di antrean." else "${fresh.size} file ditambahkan. Total ${selectedUris.size} file menunggu konfirmasi."
             }
@@ -161,7 +207,7 @@ class MainActivity : ComponentActivity() {
                                     "Ubah file jadi Markdown. Konversi dokumen dan media langsung di perangkat, lalu tinjau atau gabungkan hasilnya dalam satu dokumen terstruktur.",
                                     color = Color(0xFF49635D)
                                 )
-                                Button(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+                                Button(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !busy && historyReady, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
                                     Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp)); Text("1. Pilih file")
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -171,11 +217,17 @@ class MainActivity : ComponentActivity() {
                                 if (selectedUris.isNotEmpty()) {
                                     Text("File terpilih (${selectedUris.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF315F55))
                                     selectedUris.take(4).forEach { uri ->
+                                        val displayName by produceState(initialValue = "Memuat nama file…", key1 = uri) {
+                                            value = withContext(Dispatchers.IO) {
+                                                runCatching { DocumentStorage.queryName(this@MainActivity, uri) }
+                                                    .getOrDefault("File terpilih")
+                                            }
+                                        }
                                         Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFFF1F5F2)) {
                                             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                                                 Icon(Icons.Default.InsertDriveFile, null, tint = Color(0xFF315F55), modifier = Modifier.size(20.dp))
                                                 Spacer(Modifier.width(8.dp))
-                                                Text(DocumentStorage.queryName(this@MainActivity, uri).take(48), fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                                Text(displayName.take(48), fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                                                 IconButton(onClick = { selectedUris.remove(uri) }, enabled = !busy) {
                                                     Icon(Icons.Default.Close, "Hapus dari antrean", tint = Color.Gray, modifier = Modifier.size(18.dp))
                                                 }
@@ -188,7 +240,7 @@ class MainActivity : ComponentActivity() {
                                     val batch = selectedUris.toList()
                                     selectedUris.clear()
                                     conversionViewModel.start(applicationContext, batch, outputFolder)
-                                }, enabled = !busy && selectedUris.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+                                }, enabled = !busy && historyReady && selectedUris.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
                                     Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("2. Konfirmasi & mulai konversi")
                                 }
                                 OutlinedButton(onClick = { folderPicker.launch(outputFolder) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
@@ -225,7 +277,7 @@ class MainActivity : ComponentActivity() {
                                 AssistChip(onClick = {}, label = { Text("${files.count { it.error != null }} gagal") }, enabled = false)
                             }
                             if (files.isNotEmpty()) {
-                                TextButton(onClick = { conversionViewModel.clearResults() }, enabled = !busy) {
+                                TextButton(onClick = { conversionViewModel.clearResults(this@MainActivity) }, enabled = !busy && historyReady) {
                                     Text("Hapus hasil")
                                 }
                             }
@@ -382,7 +434,7 @@ class MainActivity : ComponentActivity() {
                         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                                 Text("Status", fontWeight = FontWeight.Bold)
-                                Text(message, color = Color.Gray, fontSize = 13.sp)
+                                Text(if (historyReady) message else "Memulihkan riwayat konversi…", color = Color.Gray, fontSize = 13.sp)
                                 if (busy) {
                                     LinearProgressIndicator(
                                         progress = { conversionViewModel.progress },
