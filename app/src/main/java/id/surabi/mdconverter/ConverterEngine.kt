@@ -25,7 +25,7 @@ import java.util.zip.ZipInputStream
 data class ConversionResult(val markdown: String, val format: String, val warnings: List<String>)
 
 object ConverterEngine {
-    private const val MAX_BYTES = 100L * 1024 * 1024
+    private const val MAX_BYTES = 64L * 1024 * 1024
     private val imageTypes = setOf("jpg","jpeg","png","webp","bmp","gif","tif","tiff","heic","heif")
     private val audioTypes = setOf("mp3","m4a","aac","wav","ogg","oga","opus","flac","amr","wma")
     private val videoTypes = setOf("mp4","m4v","mkv","webm","mov","avi","3gp","ts","mpeg","mpg")
@@ -52,7 +52,7 @@ object ConverterEngine {
                 val n = input.read(buffer)
                 if (n < 0) break
                 total += n
-                require(total <= MAX_BYTES) { "Ukuran file melebihi 100 MB." }
+                require(total <= MAX_BYTES) { "Ukuran file melebihi 64 MB." }
                 output.write(buffer, 0, n)
             }
             output.toByteArray()
