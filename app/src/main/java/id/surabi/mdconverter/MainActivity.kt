@@ -85,6 +85,17 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(conversionViewModel) {
             conversionViewModel.initialize(applicationContext)
         }
+        val files = conversionViewModel.files
+        val busy = conversionViewModel.busy
+        val historyReady = conversionViewModel.historyReady
+        var message by remember { mutableStateOf(conversionViewModel.message) }
+        LaunchedEffect(conversionViewModel.message) { message = conversionViewModel.message }
+        var preview by remember { mutableStateOf<ConvertedFile?>(null) }
+        var showHelp by remember { mutableStateOf(false) }
+        var pendingMarkdown by remember { mutableStateOf<String?>(null) }
+        var pendingName by remember { mutableStateOf("hasil.md") }
+        val selectedUris = conversionViewModel.selectedUris
+        var outputFolder by remember { mutableStateOf(DocumentStorage.loadOutputFolder(this@MainActivity)) }
         LaunchedEffect(incomingSharedUris) {
             val shared = incomingSharedUris
             if (shared.isNotEmpty()) {
@@ -101,17 +112,6 @@ class MainActivity : ComponentActivity() {
                 incomingSharedUris = emptyList()
             }
         }
-        val files = conversionViewModel.files
-        val busy = conversionViewModel.busy
-        val historyReady = conversionViewModel.historyReady
-        var message by remember { mutableStateOf(conversionViewModel.message) }
-        LaunchedEffect(conversionViewModel.message) { message = conversionViewModel.message }
-        var preview by remember { mutableStateOf<ConvertedFile?>(null) }
-        var showHelp by remember { mutableStateOf(false) }
-        var pendingMarkdown by remember { mutableStateOf<String?>(null) }
-        var pendingName by remember { mutableStateOf("hasil.md") }
-        val selectedUris = conversionViewModel.selectedUris
-        var outputFolder by remember { mutableStateOf(DocumentStorage.loadOutputFolder(this@MainActivity)) }
         val mergeScope = rememberCoroutineScope()
         val successfulCount = files.count { it.error == null }
 
