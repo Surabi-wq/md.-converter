@@ -188,7 +188,7 @@ object ConverterEngine {
         while (bounds.outWidth / sample > 2048 || bounds.outHeight / sample > 2048) sample *= 2
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: error("Gambar tidak dapat didekode.")
         try {
-            val text = recognizeText(bitmap)
+            val text = runCatching { recognizeText(bitmap) }.getOrElse { warnings.add("OCR gambar tidak dapat dijalankan: ${it.message ?: "model/perangkat tidak mendukung"}"); "" }
             val output = StringBuilder()
             output.appendLine("## Informasi gambar")
             output.appendLine("- Format: ${ext.uppercase()}")
@@ -223,7 +223,19 @@ object ConverterEngine {
             val configured = try {
                 descriptor != null && descriptor.length >= 0 && runCatching { retriever.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length) }.isSuccess
             } finally { descriptor?.close() }
-            if (!configured) retriever.setDataSource(context, uri)
+            if (!configured) {
+                val fallback = runCatching { retriever.setDataSource(context, uri) }
+                if (fallback.isFailure) {
+                    warnings.add("File media terdeteksi, tetapi decoder Android tidak dapat membaca metadata: ${fallback.exceptionOrNull()?.message ?: "format/codec tidak didukung"}.")
+                    return buildString {
+                        appendLine(if (isVideo) "## Informasi video" else "## Informasi audio")
+                        appendLine("- Nama file: $name")
+                        appendLine("- Format terdeteksi: ${name.substringAfterLast('.', "media").uppercase()}")
+                        appendLine("- MIME: ${context.contentResolver.getType(uri) ?: "Tidak diketahui"}")
+                        appendLine("_Metadata rinci tidak tersedia pada decoder perangkat ini._")
+                    }.trim()
+                }
+            }
             fun meta(key: Int): String? = retriever.extractMetadata(key)?.takeIf { it.isNotBlank() }
             val duration = meta(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
             val out = StringBuilder()
@@ -244,9 +256,9 @@ object ConverterEngine {
                 val points = if (total > 0) listOf(total / 3, total * 2 / 3) else listOf(-1L)
                 var found = false
                 points.distinct().forEachIndexed { index, ms ->
-                    val frame = if (ms < 0) retriever.getFrameAtTime() else retriever.getFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    val frame = runCatching { if (ms < 0) retriever.getFrameAtTime() else retriever.getFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) }.getOrNull()
                     if (frame != null) try {
-                        val text = recognizeText(frame)
+                        val text = runCatching { recognizeText(frame) }.getOrElse { warnings.add("OCR cuplikan video gagal: ${it.message ?: "tidak didukung"}."); "" }
                         if (text.isNotBlank()) { found = true; out.appendLine("### Cuplikan ${index + 1} — ${if (ms < 0) "waktu tidak diketahui" else formatDuration(ms)}"); out.appendLine(text); out.appendLine() }
                     } finally { frame.recycle() }
                 }
