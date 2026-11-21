@@ -64,7 +64,7 @@ object ConverterEngine {
             ext in imageTypes -> imageToMarkdown(bytes, ext, warnings)
             ext in setOf("txt","md","markdown","log") -> text.trimEnd()
             ext in codeTypes -> fenced(ext, text)
-            ext == "csv" || ext == "tsv" -> table(text, if (ext == "tsv") '\\t' else ',')
+            ext == "csv" || ext == "tsv" -> table(text, if (ext == "tsv") '\t' else ',')
             ext == "json" -> json(text)
             ext in setOf("jsonl","ndjson") -> jsonl(text)
             ext in setOf("html","htm","xhtml") -> html(text)
@@ -151,7 +151,7 @@ object ConverterEngine {
             .replace(Regex("(?i)<li\\b[^>]*>"), "\n- ")
             .replace(Regex("(?i)</(p|div|section|article|li|tr|h[1-6]|br|hr)\\s*>"), "\n")
         return Html.fromHtml(clean, Html.FROM_HTML_MODE_COMPACT).toString()
-            .replace(Regex("[ \\t]+"), " ").replace(Regex("\\n{3,}"), "\n\n").trim()
+            .replace(Regex("[ \t]+"), " ").replace(Regex("\\n{3,}"), "\n\n").trim()
     }
 
     private fun rtf(value: String): String = value
