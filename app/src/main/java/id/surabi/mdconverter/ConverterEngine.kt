@@ -1,9 +1,16 @@
 package id.surabi.mdconverter
 
-import android.content.ContentResolver
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.text.Html
 import android.util.Xml
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.google.android.gms.tasks.Tasks
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import org.json.JSONArray
@@ -19,9 +26,13 @@ data class ConversionResult(val markdown: String, val format: String, val warnin
 
 object ConverterEngine {
     private const val MAX_BYTES = 100L * 1024 * 1024
+    private val imageTypes = setOf("jpg","jpeg","png","webp","bmp","gif","tif","tiff","heic","heif")
+    private val audioTypes = setOf("mp3","m4a","aac","wav","ogg","oga","opus","flac","amr","3gp","wma")
+    private val videoTypes = setOf("mp4","m4v","mkv","webm","mov","avi","3gp","ts","mpeg","mpg")
     private val codeTypes = setOf("py","js","ts","jsx","tsx","java","kt","kts","c","h","cpp","hpp","cs","php","go","rs","swift","css","scss","sass","sh","bash","bat","ps1","sql","rb","r","lua","dart","scala")
 
-    fun convert(resolver: ContentResolver, uri: Uri, name: String): ConversionResult {
+    fun convert(context: Context, uri: Uri, name: String): ConversionResult {
+        val resolver = context.contentResolver
         val bytes = resolver.openInputStream(uri)?.use { input ->
             val output = ByteArrayOutputStream()
             val buffer = ByteArray(16 * 1024)
@@ -42,6 +53,9 @@ object ConverterEngine {
         val body = when {
             ext == "pdf" -> pdf(bytes, warnings)
             ext == "docx" -> docx(bytes, warnings)
+            ext in imageTypes -> imageToMarkdown(bytes, ext, warnings)
+            ext in audioTypes -> mediaToMarkdown(context, uri, name, false, warnings)
+            ext in videoTypes -> mediaToMarkdown(context, uri, name, true, warnings)
             ext in setOf("txt","md","markdown","log") -> text.trimEnd()
             ext in codeTypes -> fenced(ext, text)
             ext == "csv" || ext == "tsv" -> table(text, if (ext == "tsv") '\t' else ',')
@@ -142,6 +156,77 @@ object ConverterEngine {
         .replace(Regex("\\\\[a-zA-Z]+-?\\d* ?"), "")
         .replace(Regex("\\\\[^a-zA-Z]"), "")
         .replace(Regex("[{}]"), "").trim()
+
+    private fun imageToMarkdown(bytes: ByteArray, ext: String, warnings: MutableList<String>): String {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        require(bounds.outWidth > 0 && bounds.outHeight > 0) { "File gambar tidak valid." }
+        var sample = 1
+        while (bounds.outWidth / sample > 2048 || bounds.outHeight / sample > 2048) sample *= 2
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: error("Gambar tidak dapat didekode.")
+        try {
+            val text = recognizeText(bitmap)
+            val output = StringBuilder()
+            output.appendLine("## Informasi gambar")
+            output.appendLine("- Format: ${ext.uppercase()}")
+            output.appendLine("- Dimensi: ${bounds.outWidth} × ${bounds.outHeight} piksel")
+            output.appendLine("- Ukuran file: ${"%.2f".format(bytes.size / 1024.0)} KB")
+            output.appendLine()
+            output.appendLine("## Teks yang terdeteksi (OCR)")
+            if (text.isBlank()) output.appendLine("_Tidak ditemukan teks yang dapat dibaca pada gambar._") else { output.appendLine(text); warnings.add("OCR dapat keliru pada gambar buram, miring, atau tulisan tangan.") }
+            return output.toString().trim()
+        } finally { bitmap.recycle() }
+    }
+
+    private fun recognizeText(bitmap: Bitmap): String {
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        return try { Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0))).text.trim() } finally { recognizer.close() }
+    }
+
+    private fun mediaToMarkdown(context: Context, uri: Uri, name: String, isVideo: Boolean, warnings: MutableList<String>): String {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+            fun meta(key: Int): String? = retriever.extractMetadata(key)?.takeIf { it.isNotBlank() }
+            val duration = meta(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+            val out = StringBuilder()
+            out.appendLine(if (isVideo) "## Informasi video" else "## Informasi audio")
+            out.appendLine("- Nama file: $name")
+            out.appendLine("- Durasi: ${duration?.let { formatDuration(it) } ?: "Tidak diketahui"}")
+            out.appendLine("- MIME/container: ${meta(MediaMetadataRetriever.METADATA_KEY_MIMETYPE) ?: "Tidak diketahui"}")
+            meta(MediaMetadataRetriever.METADATA_KEY_TITLE)?.let { out.appendLine("- Judul: $it") }
+            meta(MediaMetadataRetriever.METADATA_KEY_ARTIST)?.let { out.appendLine("- Artis: $it") }
+            meta(MediaMetadataRetriever.METADATA_KEY_ALBUM)?.let { out.appendLine("- Album: $it") }
+            meta(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.let { out.appendLine("- Bitrate: $it bit/detik") }
+            if (isVideo) {
+                meta(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.let { out.appendLine("- Lebar: $it piksel") }
+                meta(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.let { out.appendLine("- Tinggi: $it piksel") }
+                meta(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.let { out.appendLine("- Rotasi: $it derajat") }
+                out.appendLine(); out.appendLine("## Teks pada cuplikan video (OCR)")
+                val total = duration ?: 0L
+                val points = if (total > 0) listOf(0L, total / 3, total * 2 / 3, (total - 1).coerceAtLeast(0)) else listOf(-1L)
+                var found = false
+                points.distinct().forEachIndexed { index, ms ->
+                    val frame = if (ms < 0) retriever.getFrameAtTime() else retriever.getFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    if (frame != null) try {
+                        val text = recognizeText(frame)
+                        if (text.isNotBlank()) { found = true; out.appendLine("### Cuplikan ${index + 1} — ${if (ms < 0) "waktu tidak diketahui" else formatDuration(ms)}"); out.appendLine(text); out.appendLine() }
+                    } finally { frame.recycle() }
+                }
+                if (!found) out.appendLine("_Tidak ditemukan teks pada cuplikan yang diperiksa._")
+                warnings.add("Video diperiksa pada maksimal empat cuplikan; hasil OCR bukan transkrip dialog penuh.")
+            } else {
+                out.appendLine(); out.appendLine("## Transkripsi"); out.appendLine("_Transkripsi ucapan/lirik belum tersedia; yang diekstrak hanya metadata audio._")
+                warnings.add("Audio belum ditranskripsikan. Diperlukan mesin speech-to-text untuk mengubah ucapan menjadi teks.")
+            }
+            return out.toString().trim()
+        } finally { retriever.release() }
+    }
+
+    private fun formatDuration(ms: Long): String {
+        val sec = ms / 1000; val h = sec / 3600; val m = (sec % 3600) / 60; val s = sec % 60
+        return if (h > 0) "%d:%02d:%02d".format(h,m,s) else "%02d:%02d".format(m,s)
+    }
 
     private fun pdf(bytes: ByteArray, warnings: MutableList<String>): String {
         PDDocument.load(bytes).use { document ->
