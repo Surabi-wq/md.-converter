@@ -1,0 +1,353 @@
+package id.surabi.mdconverter
+
+import android.text.Html
+import android.util.Xml
+import org.json.JSONArray
+import org.json.JSONObject
+import org.xmlpull.v1.XmlPullParser
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.util.zip.ZipInputStream
+
+/** Extracts common ZIP-based document formats without a large office-suite dependency. */
+internal object ArchiveDocumentReader {
+    private const val MAX_ENTRY_BYTES = 12 * 1024 * 1024
+    private const val MAX_TOTAL_BYTES = 40 * 1024 * 1024
+    private const val MAX_ROWS_PER_SHEET = 5000
+
+    fun convert(extension: String, bytes: ByteArray, warnings: MutableList<String>): String =
+        when (extension) {
+            "xlsx" -> xlsx(bytes, warnings)
+            "ods" -> ods(bytes, warnings)
+            "pptx" -> pptx(bytes, warnings)
+            "odt" -> odfText(bytes, warnings, "ODT")
+            "odp" -> odfText(bytes, warnings, "ODP")
+            "epub" -> epub(bytes, warnings)
+            "ipynb" -> notebook(bytes)
+            else -> error("Arsip .$extension belum didukung.")
+        }
+
+    private fun readEntries(bytes: ByteArray, keep: (String) -> Boolean): LinkedHashMap<String, String> {
+        val result = linkedMapOf<String, String>()
+        var total = 0
+        ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                val name = entry.name
+                if (!entry.isDirectory && keep(name)) {
+                    val output = ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    var entrySize = 0
+                    while (true) {
+                        val count = zip.read(buffer)
+                        if (count < 0) break
+                        entrySize += count
+                        total += count
+                        require(entrySize <= MAX_ENTRY_BYTES) { "Konten arsip terlalu besar pada $name." }
+                        require(total <= MAX_TOTAL_BYTES) { "Total konten teks arsip melebihi batas aman 40 MB." }
+                        output.write(buffer, 0, count)
+                    }
+                    result[name] = output.toString("UTF-8")
+                }
+                zip.closeEntry()
+            }
+        }
+        require(result.isNotEmpty()) { "Struktur arsip tidak dikenali atau konten teks tidak ditemukan." }
+        return result
+    }
+
+    private fun xlsx(bytes: ByteArray, warnings: MutableList<String>): String {
+        val entries = readEntries(bytes) {
+            it == "xl/sharedStrings.xml" ||
+                (it.startsWith("xl/worksheets/sheet") && it.endsWith(".xml") && !it.contains("/_rels/"))
+        }
+        val strings = entries["xl/sharedStrings.xml"]?.let(::sharedStrings).orEmpty()
+        val sheets = entries.filterKeys {
+            it.startsWith("xl/worksheets/sheet") && it.endsWith(".xml")
+        }.toSortedMap(compareBy { sheetNumber(it) })
+        require(sheets.isNotEmpty()) { "XLSX tidak memiliki lembar kerja yang dapat dibaca." }
+        warnings.add("XLSX: nilai sel yang tersimpan diekstrak. Rumus tidak dihitung ulang dan format visual tidak dipertahankan.")
+        return sheets.entries.mapIndexed { index, entry ->
+            "## Lembar " + (index + 1) + "\n\n" + renderTable(xlsxRows(entry.value, strings))
+        }.joinToString("\n\n")
+    }
+
+    private fun sheetNumber(path: String): Int =
+        Regex("sheet(\\d+)\\.xml$").find(path)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: Int.MAX_VALUE
+
+    private fun sharedStrings(xml: String): List<String> {
+        val parser = parser(xml)
+        val result = mutableListOf<String>()
+        var insideString = false
+        var insideText = false
+        var value = StringBuilder()
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> when (parser.name) {
+                    "si" -> { insideString = true; value = StringBuilder() }
+                    "t" -> if (insideString) insideText = true
+                }
+                XmlPullParser.TEXT -> if (insideString && insideText) value.append(parser.text)
+                XmlPullParser.END_TAG -> when (parser.name) {
+                    "t" -> insideText = false
+                    "si" -> { result.add(value.toString()); insideString = false }
+                }
+            }
+            event = parser.next()
+        }
+        return result
+    }
+
+    private fun xlsxRows(xml: String, shared: List<String>): List<List<String>> {
+        val parser = parser(xml)
+        val rows = mutableListOf<List<String>>()
+        var row = sortedMapOf<Int, String>()
+        var inCell = false
+        var cellType = ""
+        var cellRef = ""
+        var cellValue = StringBuilder()
+        var capture = false
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> when (parser.name) {
+                    "row" -> row = sortedMapOf()
+                    "c" -> {
+                        inCell = true
+                        cellRef = attr(parser, "r").orEmpty()
+                        cellType = attr(parser, "t").orEmpty()
+                        cellValue = StringBuilder()
+                    }
+                    "v", "t" -> if (inCell) capture = true
+                }
+                XmlPullParser.TEXT -> if (inCell && capture) cellValue.append(parser.text)
+                XmlPullParser.END_TAG -> when (parser.name) {
+                    "v", "t" -> capture = false
+                    "c" -> {
+                        val index = columnIndex(cellRef)
+                        if (index >= 0) {
+                            val raw = cellValue.toString()
+                            val value = when (cellType) {
+                                "s" -> shared.getOrNull(raw.toIntOrNull() ?: -1).orEmpty()
+                                "b" -> if (raw == "1") "TRUE" else "FALSE"
+                                else -> raw
+                            }
+                            row[index] = value
+                        }
+                        inCell = false
+                    }
+                    "row" -> if (row.isNotEmpty() && rows.size < MAX_ROWS_PER_SHEET) {
+                        val width = row.lastKey() + 1
+                        rows.add((0 until width).map { row[it].orEmpty() })
+                    }
+                }
+            }
+            event = parser.next()
+        }
+        return rows
+    }
+
+    private fun columnIndex(reference: String): Int {
+        val letters = reference.takeWhile { it.isLetter() }.uppercase()
+        if (letters.isEmpty()) return -1
+        var result = 0
+        letters.forEach { result = result * 26 + (it - 'A' + 1) }
+        return result - 1
+    }
+
+    private fun ods(bytes: ByteArray, warnings: MutableList<String>): String {
+        val xml = readEntries(bytes) { it == "content.xml" }["content.xml"]
+            ?: error("ODS tidak memiliki content.xml.")
+        warnings.add("ODS: isi sel diekstrak menjadi tabel Markdown; format, grafik, dan rumus tidak dipertahankan.")
+        val parser = parser(xml)
+        val sheets = mutableListOf<Pair<String, List<List<String>>>>()
+        var sheetName = "Lembar"
+        var rows = mutableListOf<List<String>>()
+        var row = mutableListOf<String>()
+        var cell = StringBuilder()
+        var inCell = false
+        var inParagraph = false
+        var repeatColumns = 1
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> when (parser.name) {
+                    "table" -> {
+                        sheetName = attr(parser, "name", "urn:oasis:names:tc:opendocument:xmlns:table:1.0")
+                            ?: "Lembar " + (sheets.size + 1)
+                        rows = mutableListOf()
+                    }
+                    "table-row" -> row = mutableListOf()
+                    "table-cell", "covered-table-cell" -> {
+                        inCell = true
+                        cell = StringBuilder()
+                        repeatColumns = (attr(parser, "number-columns-repeated", "urn:oasis:names:tc:opendocument:xmlns:table:1.0")?.toIntOrNull() ?: 1).coerceIn(1, 100)
+                    }
+                    "p" -> if (inCell) inParagraph = true
+                }
+                XmlPullParser.TEXT -> if (inCell && inParagraph) cell.append(parser.text)
+                XmlPullParser.END_TAG -> when (parser.name) {
+                    "p" -> if (inCell) { cell.append(' '); inParagraph = false }
+                    "table-cell", "covered-table-cell" -> {
+                        repeat(repeatColumns) { row.add(cell.toString().trim()) }
+                        inCell = false
+                    }
+                    "table-row" -> if (row.isNotEmpty() && rows.size < MAX_ROWS_PER_SHEET) rows.add(row.toList())
+                    "table" -> if (rows.isNotEmpty()) sheets.add(sheetName to rows)
+                }
+            }
+            event = parser.next()
+        }
+        require(sheets.isNotEmpty()) { "ODS tidak memiliki tabel yang dapat dibaca." }
+        return sheets.map { (name, data) -> "## " + name + "\n\n" + renderTable(data) }.joinToString("\n\n")
+    }
+
+    private fun pptx(bytes: ByteArray, warnings: MutableList<String>): String {
+        val slides = readEntries(bytes) {
+            it.startsWith("ppt/slides/slide") && it.endsWith(".xml") && !it.contains("/_rels/")
+        }.toSortedMap(compareBy { sheetNumber(it.replace("slide", "sheet")) })
+        require(slides.isNotEmpty()) { "PPTX tidak memiliki slide yang dapat dibaca." }
+        warnings.add("PPTX: teks tiap slide diekstrak. Gambar, animasi, catatan pembicara, dan tata letak tidak dipertahankan.")
+        return slides.entries.mapIndexed { index, entry ->
+            val text = xmlText(entry.value, setOf("t"))
+            "## Slide " + (index + 1) + "\n\n" + text.ifBlank { "_Tidak ada teks pada slide ini._" }
+        }.joinToString("\n\n")
+    }
+
+    private fun odfText(bytes: ByteArray, warnings: MutableList<String>, label: String): String {
+        val xml = readEntries(bytes) { it == "content.xml" }["content.xml"]
+            ?: error(label + " tidak memiliki content.xml.")
+        warnings.add(label + ": paragraf dan heading diekstrak; format halaman, gambar, tabel kompleks, dan tata letak belum dipertahankan.")
+        val parser = parser(xml)
+        val output = StringBuilder()
+        var element = ""
+        var level = 1
+        var paragraph = StringBuilder()
+        var capture = false
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> when (parser.name) {
+                    "h", "p" -> {
+                        element = parser.name
+                        level = (attr(parser, "outline-level", "urn:oasis:names:tc:opendocument:xmlns:text:1.0")?.toIntOrNull() ?: 1).coerceIn(1, 6)
+                        paragraph = StringBuilder()
+                        capture = true
+                    }
+                }
+                XmlPullParser.TEXT -> if (capture) paragraph.append(parser.text)
+                XmlPullParser.END_TAG -> if ((parser.name == "h" || parser.name == "p") && capture) {
+                    val value = paragraph.toString().replace(Regex("\\s+"), " ").trim()
+                    if (value.isNotBlank()) {
+                        if (element == "h") output.append("#".repeat(level)).append(' ').append(value).append("\n\n")
+                        else output.append(value).append("\n\n")
+                    }
+                    capture = false
+                }
+            }
+            event = parser.next()
+        }
+        return output.toString().trim().ifBlank { error(label + " tidak memiliki teks yang dapat diekstrak.") }
+    }
+
+    private fun epub(bytes: ByteArray, warnings: MutableList<String>): String {
+        val entries = readEntries(bytes) {
+            val lower = it.lowercase()
+            (lower.endsWith(".xhtml") || lower.endsWith(".html") || lower.endsWith(".htm")) &&
+                !lower.startsWith("meta-inf/") && !lower.contains("nav.xhtml") && !lower.contains("toc.xhtml")
+        }
+        require(entries.isNotEmpty()) { "EPUB tidak memiliki bab HTML/XHTML yang dapat dibaca." }
+        warnings.add("EPUB: bab teks diekstrak berdasarkan urutan nama file. Urutan bacaan berdasarkan spine EPUB dapat berbeda pada sebagian buku.")
+        return entries.entries.take(300).mapIndexed { index, entry ->
+            val title = entry.key.substringAfterLast('/').substringBeforeLast('.').replace('-', ' ').replace('_', ' ')
+            "## " + title.ifBlank { "Bab " + (index + 1) } + "\n\n" + htmlText(entry.value)
+        }.filter { it.substringAfter("\n\n").isNotBlank() }.joinToString("\n\n")
+            .ifBlank { error("Tidak ditemukan teks bab pada EPUB.") }
+    }
+
+    private fun notebook(bytes: ByteArray): String {
+        val root = JSONObject(bytes.toString(Charsets.UTF_8))
+        val cells = root.optJSONArray("cells") ?: error("Notebook tidak memiliki daftar cells.")
+        val language = root.optJSONObject("metadata")
+            ?.optJSONObject("kernelspec")
+            ?.optString("language")
+            ?.takeIf { it.isNotBlank() && it != "null" } ?: "text"
+        val output = StringBuilder()
+        for (index in 0 until cells.length()) {
+            val cell = cells.optJSONObject(index) ?: continue
+            val type = cell.optString("cell_type")
+            val source = jsonSource(cell.opt("source")).trimEnd()
+            if (source.isBlank()) continue
+            when (type) {
+                "markdown" -> output.append(source).append("\n\n")
+                "code" -> output.append("### Kode ").append(index + 1).append("\n\n")
+                    .append(fenced(language, source)).append("\n\n")
+                else -> output.append(source).append("\n\n")
+            }
+        }
+        return output.toString().trim().ifBlank { error("Notebook tidak memiliki sel teks atau kode.") }
+    }
+
+    private fun jsonSource(value: Any?): String = when (value) {
+        is String -> value
+        is JSONArray -> buildString {
+            for (index in 0 until value.length()) append(value.optString(index))
+        }
+        else -> ""
+    }
+
+    private fun htmlText(source: String): String {
+        val clean = source.replace(Regex("(?is)<(script|style|noscript)[^>]*>.*?</\\1\\s*>"), "")
+        return Html.fromHtml(clean, Html.FROM_HTML_MODE_COMPACT).toString()
+            .replace(Regex("[ \\t]+"), " ")
+            .replace(Regex("\\n{3,}"), "\n\n")
+            .trim()
+    }
+
+    private fun xmlText(xml: String, tags: Set<String>): String {
+        val parser = parser(xml)
+        val output = StringBuilder()
+        var capture = false
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> if (parser.name in tags) capture = true
+                XmlPullParser.TEXT -> if (capture) output.append(parser.text).append(' ')
+                XmlPullParser.END_TAG -> if (parser.name in tags) capture = false
+            }
+            event = parser.next()
+        }
+        return output.toString().replace(Regex("\\s+"), " ").trim()
+    }
+
+    private fun renderTable(source: List<List<String>>): String {
+        require(source.isNotEmpty()) { "Lembar kerja kosong." }
+        val width = source.maxOf { it.size }.coerceAtLeast(1)
+        val rows = source.map { it.take(width) + List((width - it.size).coerceAtLeast(0)) { "" } }
+        fun render(row: List<String>) = "| " + row.joinToString(" | ") {
+            it.trim().replace("|", "\\|").replace("\r", "").replace("\n", "<br>")
+        } + " |"
+        return buildString {
+            appendLine(render(rows.first()))
+            appendLine("| " + List(width) { "---" }.joinToString(" | ") + " |")
+            rows.drop(1).forEach { appendLine(render(it)) }
+        }.trimEnd()
+    }
+
+    private fun fenced(language: String, value: String): String {
+        val longest = Regex("\u0060{3,}").findAll(value).maxOfOrNull { it.value.length } ?: 0
+        val fence = "\u0060".repeat(maxOf(3, longest + 1))
+        return fence + language + "\n" + value.trimEnd() + "\n" + fence
+    }
+
+    private fun parser(xml: String): XmlPullParser {
+        val parser = Xml.newPullParser()
+        parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
+        parser.setInput(xml.reader())
+        return parser
+    }
+
+    private fun attr(parser: XmlPullParser, name: String, namespace: String? = null): String? =
+        parser.getAttributeValue(namespace, name) ?: parser.getAttributeValue(null, name)
+}

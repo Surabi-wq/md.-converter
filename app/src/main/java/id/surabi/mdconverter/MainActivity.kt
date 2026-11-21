@@ -55,8 +55,9 @@ class MainActivity : ComponentActivity() {
         var busy by remember { mutableStateOf(false) }
         var message by remember { mutableStateOf("Pilih dokumen atau media untuk mulai.") }
         var preview by remember { mutableStateOf<ConvertedFile?>(null) }
+        var showHelp by remember { mutableStateOf(false) }
         var pendingMarkdown by remember { mutableStateOf<String?>(null) }
-        var pendingName by remember { mutableStateOf("hasil-konversi.md") }
+        var pendingName by remember { mutableStateOf("hasil.md") }
         val selectedUris = remember { mutableStateListOf<Uri>() }
         var outputFolder by remember { mutableStateOf(loadOutputFolder()) }
         val successfulCount = files.count { it.error == null }
@@ -115,6 +116,11 @@ class MainActivity : ComponentActivity() {
                         navigationIcon = {
                             Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFF315F55), modifier = Modifier.padding(start = 14.dp)) {
                                 Icon(painterResource(R.drawable.ic_marka_foreground), "Logo Marka", tint = Color.Unspecified, modifier = Modifier.padding(4.dp).size(30.dp))
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = { showHelp = true }) {
+                                Icon(Icons.Default.HelpOutline, contentDescription = "Panduan penggunaan Marka")
                             }
                         }
                     )
@@ -178,7 +184,17 @@ class MainActivity : ComponentActivity() {
                                 OutlinedButton(onClick = { folderPicker.launch(outputFolder) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                                     Icon(Icons.Default.Folder, null); Spacer(Modifier.width(8.dp)); Text(if (outputFolder == null) "Pilih folder keluaran" else "Ganti folder keluaran")
                                 }
-                                Text(if (outputFolder == null) "Folder belum dipilih. Hasil dapat disimpan manual." else "Hasil gabungan akan disimpan otomatis ke folder pilihan.", fontSize = 12.sp, color = Color.Gray)
+                                Text(
+                                    if (outputFolder == null) "Folder belum dipilih. Hasil dapat diekspor saat proses selesai."
+                                    else "Hasil tiap file disimpan otomatis di folder ini. Dokumen gabungan dibuat terpisah melalui tombol 3.",
+                                    fontSize = 12.sp,
+                                    color = Color.Gray
+                                )
+                                Text(
+                                    "Nama hasil mengikuti nama file asli; hanya ekstensinya yang berubah menjadi .md.",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray
+                                )
                             }
                         }
                     }
@@ -204,31 +220,70 @@ class MainActivity : ComponentActivity() {
                     item {
                         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
                             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                                Text("Dokumen gabungan", fontWeight = FontWeight.Bold)
+                                Text("3. Dokumen gabungan", fontWeight = FontWeight.Bold)
                                 Text(
-                                    if (successfulCount == 0) "Konversikan minimal satu file agar dapat membuat dokumen gabungan."
-                                    else "$successfulCount bagian siap digabung. Urutannya mengikuti urutan file dalam antrean.",
+                                    if (successfulCount == 0) "Setelah konversi selesai, semua hasil yang berhasil akan muncul di sini."
+                                    else successfulCount.toString() + " hasil siap disatukan menjadi satu dokumen Markdown. Isi setiap sumber menjadi bagian tersendiri dan urutannya mengikuti daftar hasil.",
                                     color = Color.Gray,
                                     fontSize = 12.sp
                                 )
+                                Text(
+                                    if (successfulCount == 0) "Nama file gabungan: belum tersedia"
+                                    else "Nama file gabungan: " + MarkdownFileNames.merged(files.filter { it.error == null }.map { it.name }),
+                                    color = Color(0xFF315F55),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                                 Button(
                                     onClick = {
-                                        pendingMarkdown = combined
-                                        pendingName = "gabungan-markdown.md"
-                                        saver.launch(pendingName)
+                                        val successful = files.filter { it.error == null }
+                                        val documentName = MarkdownFileNames.merged(successful.map { it.name })
+                                        val folder = outputFolder
+                                        if (folder == null) {
+                                            pendingMarkdown = combined
+                                            pendingName = documentName
+                                            saver.launch(documentName)
+                                        } else {
+                                            lifecycleScope.launch {
+                                                try {
+                                                    val savedName = withContext(Dispatchers.IO) {
+                                                        saveToFolder(folder, documentName, combined)
+                                                    }
+                                                    message = "Dokumen gabungan berhasil disimpan sebagai " + savedName
+                                                } catch (e: Exception) {
+                                                    message = "Gagal menyimpan dokumen gabungan: " + (e.message ?: "kesalahan penyimpanan")
+                                                }
+                                            }
+                                        }
                                     },
-                                    enabled = !busy && successfulCount > 0,
+                                    enabled = !busy && successfulCount >= 2,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Icon(Icons.Default.MergeType, null)
                                     Spacer(Modifier.width(8.dp))
-                                    Text("Gabungkan dan simpan satu .md")
+                                    Text("3. Gabungkan & simpan satu file .md")
                                 }
                                 OutlinedButton(
-                                    onClick = { preview = ConvertedFile(-1L, "gabungan-markdown.md", "md", combined, emptyList(), null) },
-                                    enabled = successfulCount > 0,
+                                    onClick = {
+                                        val successful = files.filter { it.error == null }
+                                        preview = ConvertedFile(
+                                            -1L,
+                                            MarkdownFileNames.merged(successful.map { it.name }),
+                                            "md",
+                                            combined,
+                                            emptyList(),
+                                            null
+                                        )
+                                    },
+                                    enabled = !busy && successfulCount >= 2,
                                     modifier = Modifier.fillMaxWidth()
-                                ) { Text("Pratinjau dokumen gabungan") }
+                                ) { Text("Lihat pratinjau hasil gabungan") }
+                                Text(
+                                    if (successfulCount < 2) "Pilih dan konversi minimal dua file untuk mengaktifkan penggabungan. Hasil tiap file tetap dapat disimpan sendiri."
+                                    else "Konversi satu per satu tetap tersimpan terpisah. Penggabungan adalah langkah opsional.",
+                                    color = Color.Gray,
+                                    fontSize = 11.sp
+                                )
                             }
                         }
                     }
@@ -267,7 +322,7 @@ class MainActivity : ComponentActivity() {
                                     IconButton(
                                         onClick = {
                                             pendingMarkdown = file.markdown
-                                            pendingName = file.name.substringBeforeLast('.', file.name).ifBlank { "hasil" } + ".md"
+                                            pendingName = MarkdownFileNames.fromSource(file.name)
                                             saver.launch(pendingName)
                                         },
                                         enabled = file.error == null
@@ -305,6 +360,46 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            if (showHelp) {
+                AlertDialog(
+                    onDismissRequest = { showHelp = false },
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.HelpOutline, contentDescription = null, tint = Color(0xFF315F55))
+                            Text("Panduan penggunaan Marka")
+                        }
+                    },
+                    text = {
+                        Column(
+                            Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text("Cara menggunakan", fontWeight = FontWeight.Bold, color = Color(0xFF315F55))
+                            UsageGuide.steps.forEachIndexed { index, step ->
+                                Text((index + 1).toString() + ". " + step, fontSize = 13.sp)
+                            }
+                            HorizontalDivider()
+                            Text("Aturan nama hasil", fontWeight = FontWeight.Bold, color = Color(0xFF315F55))
+                            Text(UsageGuide.naming, fontSize = 12.sp)
+                            Text(UsageGuide.merge, fontSize = 12.sp)
+                            HorizontalDivider()
+                            Text("Format yang didukung", fontWeight = FontWeight.Bold, color = Color(0xFF315F55))
+                            SupportedFormats.groups.forEach { group ->
+                                Text(group.title + " — " + group.extensions.joinToString(", ") { "." + it }, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                Text(group.note, fontSize = 11.sp, color = Color.Gray)
+                            }
+                            HorizontalDivider()
+                            Text("Batasan penting", fontWeight = FontWeight.Bold, color = Color(0xFF315F55))
+                            Text("Format DOC, XLS, dan PPT lama belum didukung. PDF hasil scan belum menjalani OCR. Audio belum ditranskripsikan menjadi ucapan/lirik; OCR video hanya membaca teks pada cuplikan, bukan dialog.", fontSize = 12.sp)
+                            Text(UsageGuide.privacy, fontSize = 12.sp, color = Color.Gray)
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showHelp = false }) { Text("Mengerti") }
+                    }
+                )
+            }
+
             preview?.let { item ->
                 AlertDialog(
                     onDismissRequest = { preview = null },
@@ -319,7 +414,7 @@ class MainActivity : ComponentActivity() {
                     confirmButton = {
                         TextButton(onClick = {
                             pendingMarkdown = item.markdown
-                            pendingName = item.name.substringBeforeLast('.', item.name).ifBlank { "hasil" } + ".md"
+                            pendingName = MarkdownFileNames.fromSource(item.name)
                             saver.launch(pendingName)
                         }) { Text("Ekspor .md") }
                     },
@@ -338,7 +433,7 @@ class MainActivity : ComponentActivity() {
         onStatus: (Boolean, String) -> Unit
     ) {
         lifecycleScope.launch {
-            onStatus(true, "Memproses ${uris.size} file…")
+            onStatus(true, "Memproses " + uris.size + " file secara berurutan…")
             var completed = 0
             try {
                 for (uri in uris) {
@@ -369,27 +464,36 @@ class MainActivity : ComponentActivity() {
                     }
                     files.add(converted)
                     completed++
-                    onStatus(true, "Memproses file $completed dari ${uris.size}…")
+                    onStatus(true, "Memproses file " + completed + " dari " + uris.size + "…")
                 }
+
                 val successful = files.filter { it.error == null }
                 if (successful.isNotEmpty() && outputFolder != null) {
-                    try {
-                        withContext(Dispatchers.IO) {
-                            saveToFolder(outputFolder, "konversi-${System.currentTimeMillis()}.md", combineMarkdown(successful))
+                    var savedCount = 0
+                    val saveErrors = mutableListOf<String>()
+                    withContext(Dispatchers.IO) {
+                        successful.forEach { item ->
+                            try {
+                                saveToFolder(outputFolder, MarkdownFileNames.fromSource(item.name), item.markdown)
+                                savedCount++
+                            } catch (e: Exception) {
+                                saveErrors.add(item.name + ": " + (e.message ?: "gagal disimpan"))
+                            }
                         }
-                        onStatus(false, "Selesai. $completed file diproses dan hasil disimpan otomatis.")
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        onStatus(false, "Konversi selesai, tetapi penyimpanan otomatis gagal: ${e.message ?: "izin folder mungkin telah dicabut"}. Ekspor hasil secara manual atau pilih folder lain.")
                     }
-                } else if (successful.isNotEmpty()) onStatus(false, "Selesai. $completed file diperiksa. Pilih folder keluaran untuk simpan otomatis.")
-                else onStatus(false, "Tidak ada file yang berhasil dikonversi.")
+                    val status = "Konversi selesai: " + completed + " file diperiksa; " + savedCount +
+                        " hasil tersimpan dengan nama sumber + .md. Untuk menyatukan hasil, gunakan tombol 3."
+                    onStatus(false, if (saveErrors.isEmpty()) status else status + " Gagal menyimpan: " + saveErrors.joinToString("; "))
+                } else if (successful.isNotEmpty()) {
+                    onStatus(false, "Konversi selesai: " + completed + " file diperiksa. Pilih folder keluaran untuk simpan otomatis atau ekspor tiap hasil. Gunakan tombol 3 untuk menggabungkan.")
+                } else {
+                    onStatus(false, "Tidak ada file yang berhasil dikonversi.")
+                }
             } catch (e: CancellationException) {
-                onStatus(false, "Proses dibatalkan setelah $completed file.")
+                onStatus(false, "Proses dibatalkan setelah " + completed + " file.")
                 throw e
             } catch (e: Exception) {
-                onStatus(false, "Proses terhenti: ${e.message ?: "kesalahan tidak diketahui"}")
+                onStatus(false, "Proses terhenti: " + (e.message ?: "kesalahan tidak diketahui"))
             }
         }
     }
@@ -402,18 +506,47 @@ class MainActivity : ComponentActivity() {
         return uri.takeIf { granted }
     }
 
-    private fun saveToFolder(tree: Uri, name: String, markdown: String) {
-        val root = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
-        val output = DocumentsContract.createDocument(contentResolver, root, "text/markdown", name)
+    private fun saveToFolder(tree: Uri, name: String, markdown: String): String {
+        val rootId = DocumentsContract.getTreeDocumentId(tree)
+        val root = DocumentsContract.buildDocumentUriUsingTree(tree, rootId)
+        val finalName = uniqueDocumentName(tree, rootId, name)
+        val output = DocumentsContract.createDocument(contentResolver, root, "text/markdown", finalName)
             ?: error("Tidak dapat membuat file pada folder tujuan.")
         try {
             (contentResolver.openOutputStream(output, "wt")
                 ?: error("Tidak dapat membuka file keluaran."))
                 .bufferedWriter(Charsets.UTF_8).use { it.write(markdown) }
+            return finalName
         } catch (e: Exception) {
             runCatching { DocumentsContract.deleteDocument(contentResolver, output) }
             throw e
         }
+    }
+
+    private fun uniqueDocumentName(tree: Uri, rootId: String, requested: String): String {
+        val childUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, rootId)
+        val existing = runCatching {
+            contentResolver.query(
+                childUri,
+                arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                buildSet {
+                    val index = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    while (cursor.moveToNext() && index >= 0) add(cursor.getString(index))
+                }
+            }.orEmpty()
+        }.getOrDefault(emptySet())
+        if (requested !in existing) return requested
+
+        val dot = requested.lastIndexOf('.')
+        val base = if (dot > 0) requested.substring(0, dot) else requested
+        val extension = if (dot > 0) requested.substring(dot) else ""
+        var index = 2
+        while (base + " (" + index + ")" + extension in existing) index++
+        return base + " (" + index + ")" + extension
     }
 
     private fun queryName(uri: Uri): String {
