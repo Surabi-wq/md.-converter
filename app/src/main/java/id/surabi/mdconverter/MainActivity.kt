@@ -252,7 +252,7 @@ class MainActivity : ComponentActivity() {
                                         val documentName = MarkdownFileNames.merged(successful.map { it.name })
                                         val folder = outputFolder
                                         mergeScope.launch {
-                                            val markdown = withContext(Dispatchers.Default) { combineMarkdown(successful) }
+                                            val markdown = withContext(Dispatchers.IO) { combineMarkdown(successful) }
                                             if (folder == null) {
                                                 pendingMarkdown = markdown
                                                 pendingName = documentName
@@ -280,7 +280,7 @@ class MainActivity : ComponentActivity() {
                                     onClick = {
                                         val successful = files.filter { it.error == null }
                                         mergeScope.launch {
-                                            val markdown = withContext(Dispatchers.Default) { combineMarkdown(successful) }
+                                            val markdown = withContext(Dispatchers.IO) { combineMarkdown(successful) }
                                             preview = ConvertedFile(
                                                 -1L,
                                                 MarkdownFileNames.merged(successful.map { it.name }),
@@ -337,9 +337,11 @@ class MainActivity : ComponentActivity() {
                                     }
                                     IconButton(
                                         onClick = {
-                                            pendingMarkdown = file.readMarkdown()
-                                            pendingName = MarkdownFileNames.fromSource(file.name)
-                                            saver.launch(pendingName)
+                                            mergeScope.launch {
+                                                pendingMarkdown = withContext(Dispatchers.IO) { file.readMarkdown() }
+                                                pendingName = MarkdownFileNames.fromSource(file.name)
+                                                saver.launch(pendingName)
+                                            }
                                         },
                                         enabled = file.error == null
                                     ) { Icon(Icons.Default.Download, "Simpan") }
@@ -348,7 +350,12 @@ class MainActivity : ComponentActivity() {
                                 if (file.error != null) Text(file.error, color = Color.Red, fontSize = 12.sp)
                                 if (file.error == null) {
                                     OutlinedButton(
-                                        onClick = { preview = file.copy(markdown = file.readMarkdown(), cacheFilePath = null) },
+                                        onClick = {
+                                            mergeScope.launch {
+                                                val markdown = withContext(Dispatchers.IO) { file.readMarkdown() }
+                                                preview = file.copy(markdown = markdown, cacheFilePath = null)
+                                            }
+                                        },
                                         modifier = Modifier.fillMaxWidth()
                                     ) { Text("Lihat Markdown") }
                                 }
