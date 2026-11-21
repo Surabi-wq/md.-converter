@@ -12,9 +12,9 @@ internal object MarkdownMerger {
             items.forEachIndexed { index, item ->
                 val heading = "${index + 1}. ${item.name}"
                 val anchor = heading.lowercase()
-                    .replace(Regex("[^a-z0-9\\s-]"), "")
+                    .replace(Regex("[^a-z0-9\\s-]"), " ")
                     .trim()
-                    .replace(Regex("\\s+"), "-")
+                    .replace(Regex("[\\s-]+"), "-")
                 appendLine("- [${heading.replace("[", "\\[").replace("]", "\\]")}](#${anchor})")
             }
             items.forEachIndexed { index, item ->
