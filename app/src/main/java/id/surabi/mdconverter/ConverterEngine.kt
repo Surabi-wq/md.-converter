@@ -3,6 +3,7 @@ package id.surabi.mdconverter
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.text.Html
@@ -179,8 +180,18 @@ object ConverterEngine {
     }
 
     private fun recognizeText(bitmap: Bitmap): String {
+        val maxSide = maxOf(bitmap.width, bitmap.height)
+        val scaled = if (maxSide > 2048) {
+            val ratio = 2048f / maxSide.toFloat()
+            Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt().coerceAtLeast(1), (bitmap.height * ratio).toInt().coerceAtLeast(1), true)
+        } else bitmap
         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-        return try { Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0))).text.trim() } finally { recognizer.close() }
+        return try {
+            Tasks.await(recognizer.process(InputImage.fromBitmap(scaled, 0))).text.trim()
+        } finally {
+            recognizer.close()
+            if (scaled !== bitmap) scaled.recycle()
+        }
     }
 
     private fun mediaToMarkdown(context: Context, uri: Uri, name: String, isVideo: Boolean, warnings: MutableList<String>): String {
