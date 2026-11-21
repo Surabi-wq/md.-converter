@@ -1,6 +1,7 @@
 package id.surabi.mdconverter
 
 import android.net.Uri
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import android.os.Bundle
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
@@ -29,7 +30,8 @@ import kotlinx.coroutines.withContext
 data class ConvertedFile(val name:String,val format:String,val markdown:String,val warnings:List<String>,val error:String?)
 
 class MainActivity:ComponentActivity(){
- override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState);setContent{Screen()}}
+ override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState);PDFBoxResourceLoader.init(applicationContext);setContent{Screen()}}
+ @OptIn(ExperimentalMaterial3Api::class)
  @Composable private fun Screen(){
   val files= remember { mutableStateListOf<ConvertedFile>() }
   var busy by remember{mutableStateOf(false)}
