@@ -57,7 +57,7 @@ class MainActivity : ComponentActivity() {
         var pendingMarkdown by remember { mutableStateOf<String?>(null) }
         var pendingName by remember { mutableStateOf("hasil-konversi.md") }
         val selectedUris = remember { mutableStateListOf<Uri>() }
-        var outputFolder by remember { mutableStateOf(getSharedPreferences("settings", MODE_PRIVATE).getString("output_tree", null)?.let { Uri.parse(it) }) }
+        var outputFolder by remember { mutableStateOf(loadOutputFolder()) }
         val successfulCount = files.count { it.error == null }
         val combined = remember(files.toList()) { files.filter { it.error == null }.takeIf { it.isNotEmpty() }?.let(::combineMarkdown).orEmpty() }
 
@@ -329,8 +329,8 @@ class MainActivity : ComponentActivity() {
             var completed = 0
             try {
                 for (uri in uris) {
-                    val name = runCatching { queryName(uri) }.getOrDefault("dokumen")
                     val converted = withContext(Dispatchers.IO) {
+                        val name = runCatching { queryName(uri) }.getOrDefault("dokumen")
                         try {
                             val result = ConverterEngine.convert(this@MainActivity, uri, name)
                             ConvertedFile(
@@ -360,10 +360,16 @@ class MainActivity : ComponentActivity() {
                 }
                 val successful = files.filter { it.error == null }
                 if (successful.isNotEmpty() && outputFolder != null) {
-                    withContext(Dispatchers.IO) {
-                        saveToFolder(outputFolder, "konversi-${System.currentTimeMillis()}.md", combineMarkdown(successful))
+                    try {
+                        withContext(Dispatchers.IO) {
+                            saveToFolder(outputFolder, "konversi-${System.currentTimeMillis()}.md", combineMarkdown(successful))
+                        }
+                        onStatus(false, "Selesai. $completed file diproses dan hasil disimpan otomatis.")
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        onStatus(false, "Konversi selesai, tetapi penyimpanan otomatis gagal: ${e.message ?: "izin folder mungkin telah dicabut"}. Ekspor hasil secara manual atau pilih folder lain.")
                     }
-                    onStatus(false, "Selesai. $completed file diproses dan hasil disimpan otomatis.")
                 } else if (successful.isNotEmpty()) onStatus(false, "Selesai. $completed file diperiksa. Pilih folder keluaran untuk simpan otomatis.")
                 else onStatus(false, "Tidak ada file yang berhasil dikonversi.")
             } catch (e: CancellationException) {
@@ -375,11 +381,28 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun loadOutputFolder(): Uri? {
+        val saved = getSharedPreferences("settings", MODE_PRIVATE).getString("output_tree", null) ?: return null
+        val uri = runCatching { Uri.parse(saved) }.getOrNull() ?: return null
+        val granted = contentResolver.persistedUriPermissions.any { it.uri == uri && it.isWritePermission }
+        if (!granted) getSharedPreferences("settings", MODE_PRIVATE).edit().remove("output_tree").apply()
+        return uri.takeIf { granted }
+    }
+
     private fun saveToFolder(tree: Uri, name: String, markdown: String) {
         val root = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
-        val output = DocumentsContract.createDocument(contentResolver, root, "text/markdown", name) ?: error("Tidak dapat membuat file pada folder tujuan.")
-        (contentResolver.openOutputStream(output, "wt") ?: error("Tidak dapat membuka file keluaran.")).bufferedWriter(Charsets.UTF_8).use { it.write(markdown) }
+        val output = DocumentsContract.createDocument(contentResolver, root, "text/markdown", name)
+            ?: error("Tidak dapat membuat file pada folder tujuan.")
+        try {
+            (contentResolver.openOutputStream(output, "wt")
+                ?: error("Tidak dapat membuka file keluaran."))
+                .bufferedWriter(Charsets.UTF_8).use { it.write(markdown) }
+        } catch (e: Exception) {
+            runCatching { DocumentsContract.deleteDocument(contentResolver, output) }
+            throw e
+        }
     }
+
     private fun queryName(uri: Uri): String {
         contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
