@@ -46,6 +46,26 @@ internal object DocumentStorage {
         }
     }
 
+    fun saveMergedToFolder(context: Context, tree: Uri, requestedName: String, items: List<ConvertedFile>): String {
+        require(items.isNotEmpty()) { "Tidak ada hasil konversi yang dapat digabungkan." }
+        val rootId = DocumentsContract.getTreeDocumentId(tree)
+        val root = DocumentsContract.buildDocumentUriUsingTree(tree, rootId)
+        val finalName = uniqueDocumentName(context, tree, rootId, requestedName)
+        val output = DocumentsContract.createDocument(context.contentResolver, root, "text/markdown", finalName)
+            ?: error("Tidak dapat membuat file pada folder tujuan.")
+        try {
+            val stream = context.contentResolver.openOutputStream(output, "wt")
+                ?: error("Tidak dapat membuka file keluaran.")
+            stream.bufferedWriter(Charsets.UTF_8).use { writer ->
+                MarkdownMerger.writeTo(items, writer)
+            }
+            return finalName
+        } catch (error: Exception) {
+            runCatching { DocumentsContract.deleteDocument(context.contentResolver, output) }
+            throw error
+        }
+    }
+
     fun saveCachedFile(context: Context, tree: Uri, requestedName: String, cacheFile: File): String {
         require(cacheFile.isFile) { "Cache hasil konversi tidak ditemukan." }
         val rootId = DocumentsContract.getTreeDocumentId(tree)
