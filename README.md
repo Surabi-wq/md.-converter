@@ -1,6 +1,6 @@
 # Marka — File to Markdown
 
-Marka 1.7.1 adalah aplikasi Android native untuk mengubah dokumen, teks, source code, gambar, audio, dan video menjadi dokumen Markdown (`.md`) secara lokal di perangkat. Beberapa file dari berbagai format dapat diproses dalam satu antrean, ditinjau per file, lalu digabungkan secara opsional menjadi satu dokumen dengan daftar isi.
+Marka 1.8.1 adalah aplikasi Android native untuk mengubah dokumen, teks, source code, gambar, audio, dan video menjadi dokumen Markdown (`.md`) secara lokal di perangkat. Beberapa file dari berbagai format dapat diproses dalam satu antrean, ditinjau per file, lalu digabungkan secara opsional menjadi satu dokumen dengan daftar isi.
 
 ## Alur penggunaan
 
@@ -127,3 +127,11 @@ Pemrosesan dan riwayat dilakukan secara lokal. File asli tidak diubah dan tidak 
 - Android lint: `gradle --no-daemon :app:lintDebug`
 
 GitHub Actions menjalankan tes unit, lint, dan build debug pada push ke `main` serta pull request menuju `main`.
+
+
+## Pembaruan 1.8.1 — navigasi dan ringkasan dokumen
+
+- Preview menampilkan ringkasan jumlah kata, bagian, tabel, dan estimasi waktu baca.
+- Daftar isi otomatis dibangun dari heading Markdown dan dapat ditekan untuk berpindah ke bagian terkait.
+- Navigasi daftar isi dibatasi hingga 20 heading pertama agar dokumen panjang tetap ringan; bagian tambahan tetap dapat dibaca melalui isi dokumen.
+- Pipeline CI menjalankan tes unit dan Android lint sebelum membangun APK.
