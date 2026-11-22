@@ -706,7 +706,7 @@ object ConverterEngine {
                     entrySize += count
                     totalUncompressed += count
                     require(entrySize <= if (isDocumentXml) 20L * 1024 * 1024 else 32L * 1024 * 1024) {
-                        "Konten arsip DOCX terlalu besar pada \${entry.name}."
+                        "Konten arsip DOCX terlalu besar pada ${entry.name}."
                     }
                     require(totalUncompressed <= 64L * 1024 * 1024) {
                         "Total data hasil dekompresi DOCX melebihi 64 MB."
