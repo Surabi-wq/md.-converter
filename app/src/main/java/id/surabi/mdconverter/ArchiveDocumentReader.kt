@@ -93,7 +93,7 @@ internal object ArchiveDocumentReader {
         warnings.add("XLSX: nilai sel yang tersimpan diekstrak. Rumus tidak dihitung ulang dan format visual tidak dipertahankan.")
         return sheets.entries.mapIndexed { index, entry ->
             val label = "Lembar " + (index + 1)
-            "## " + label + "\n\n" + renderTable(xlsxRows(entry.value, strings, warnings, label))
+            "## " + label + "\n\n" + MarkdownTableRenderer.render(xlsxRows(entry.value, strings, warnings, label))
         }.joinToString("\n\n")
     }
 
@@ -249,7 +249,7 @@ internal object ArchiveDocumentReader {
             event = parser.next()
         }
         require(sheets.isNotEmpty()) { "ODS tidak memiliki tabel yang dapat dibaca." }
-        return sheets.map { (name, data) -> "## " + name + "\n\n" + renderTable(data) }.joinToString("\n\n")
+        return sheets.map { (name, data) -> "## " + name + "\n\n" + MarkdownTableRenderer.render(data) }.joinToString("\n\n")
     }
 
     private fun pptx(bytes: ByteArray, warnings: MutableList<String>): String {
@@ -464,20 +464,6 @@ internal object ArchiveDocumentReader {
             event = parser.next()
         }
         return output.toString().replace(Regex("\\s+"), " ").trim()
-    }
-
-    private fun renderTable(source: List<List<String>>): String {
-        require(source.isNotEmpty()) { "Lembar kerja kosong." }
-        val width = source.maxOf { it.size }.coerceAtLeast(1)
-        val rows = source.map { it.take(width) + List((width - it.size).coerceAtLeast(0)) { "" } }
-        fun render(row: List<String>) = "| " + row.joinToString(" | ") {
-            it.trim().replace("|", "\\|").replace("\r", "").replace("\n", "<br>")
-        } + " |"
-        return buildString {
-            appendLine(render(rows.first()))
-            appendLine("| " + List(width) { "---" }.joinToString(" | ") + " |")
-            rows.drop(1).forEach { appendLine(render(it)) }
-        }.trimEnd()
     }
 
     private fun fenced(language: String, value: String): String {
