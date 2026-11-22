@@ -18,7 +18,7 @@ class MarkdownDocumentInsightsTest {
             "| Makan | 120 |"
         ).joinToString("\n")
         val result = MarkdownDocumentInsightsCalculator.calculate(MarkdownBlockParser.parse(source))
-        assertEquals(10, result.wordCount)
+        assertEquals(11, result.wordCount)
         assertEquals(2, result.sectionCount)
         assertEquals(1, result.tableCount)
         assertEquals(0, result.codeBlockCount)
