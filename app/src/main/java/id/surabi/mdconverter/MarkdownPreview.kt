@@ -1,6 +1,7 @@
 package id.surabi.mdconverter
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,9 +20,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -31,6 +36,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 
 private val PaperInk = Color(0xFF26332E)
 private val PaperGreen = Color(0xFF315F55)
@@ -46,6 +52,10 @@ internal fun MarkdownPreview(
     warnings: List<String> = emptyList()
 ) {
     val blocks = remember(markdown) { MarkdownBlockParser.parse(markdown) }
+    val insights = remember(markdown, blocks) { MarkdownDocumentInsightsCalculator.calculate(blocks) }
+    val scrollState = rememberScrollState()
+    val headingPositions = remember(markdown) { mutableStateMapOf<Int, Int>() }
+    val scope = rememberCoroutineScope()
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -55,7 +65,7 @@ internal fun MarkdownPreview(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
                 .padding(horizontal = 12.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -131,6 +141,55 @@ internal fun MarkdownPreview(
                     }
                     HorizontalDivider(color = PaperLine, thickness = 1.dp)
 
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFFF5F8F6),
+                        border = BorderStroke(1.dp, PaperLine)
+                    ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("RINGKASAN DOKUMEN", color = PaperGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                InsightMetric(insights.wordCount.toString(), "KATA", Modifier.weight(1f))
+                                InsightMetric(insights.sectionCount.toString(), "BAGIAN", Modifier.weight(1f))
+                                InsightMetric(insights.tableCount.toString(), "TABEL", Modifier.weight(1f))
+                                InsightMetric(insights.readingMinutes.toString() + " mnt", "BACA", Modifier.weight(1f))
+                            }
+                        }
+                    }
+
+                    val outline = blocks.mapIndexedNotNull { index, block ->
+                        (block as? MarkdownBlock.Heading)?.let { index to it }
+                    }
+                    if (outline.isNotEmpty()) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFFFAFCFB),
+                            border = BorderStroke(1.dp, PaperLine)
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("DAFTAR ISI", color = PaperGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                outline.take(20).forEach { (index, heading) ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                val target = headingPositions[index]
+                                                if (target != null) scope.launch { scrollState.animateScrollTo(target.coerceAtLeast(0)) }
+                                            }
+                                            .padding(start = ((heading.level - 1).coerceAtMost(5) * 10).dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("›", color = PaperGreen, fontSize = 13.sp, modifier = Modifier.padding(end = 7.dp))
+                                        Text(heading.text, color = PaperInk, fontSize = 11.sp, maxLines = 2, lineHeight = 15.sp)
+                                    }
+                                }
+                                if (outline.size > 20) Text("+ " + (outline.size - 20) + " bagian lainnya", color = PaperMuted, fontSize = 10.sp)
+                            }
+                        }
+                    }
+
                     if (blocks.isEmpty()) {
                         Text(
                             "Tidak ada konten yang dapat ditampilkan.",
@@ -138,7 +197,14 @@ internal fun MarkdownPreview(
                             fontSize = 13.sp
                         )
                     } else {
-                        blocks.forEach { block ->
+                        blocks.forEachIndexed { blockIndex, block ->
+                            Column(
+                                modifier = Modifier.fillMaxWidth().onGloballyPositioned { coordinates ->
+                                    if (scrollState.value == 0) {
+                                        headingPositions[blockIndex] = coordinates.positionInParent().y.toInt()
+                                    }
+                                }
+                            ) {
                             when (block) {
                                 is MarkdownBlock.Heading -> {
                                     val headingSize = when (block.level) {
@@ -320,6 +386,7 @@ internal fun MarkdownPreview(
                                     HorizontalDivider(color = PaperLine, thickness = 1.dp)
                                 }
                             }
+                            }
                         }
                     }
 
@@ -394,4 +461,13 @@ private fun inlineMarkdown(value: String) = buildAnnotatedString {
         cursor = match.range.last + 1
     }
     if (cursor < value.length) append(value.substring(cursor))
+}
+
+
+@Composable
+private fun InsightMetric(value: String, label: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(value, color = PaperInk, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Text(label, color = PaperMuted, fontSize = 8.sp, letterSpacing = 0.6.sp, maxLines = 1)
+    }
 }
