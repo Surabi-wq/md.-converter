@@ -122,6 +122,7 @@ Pemrosesan dan riwayat dilakukan secara lokal. File asli tidak diubah dan tidak 
 - Gradle: 8.9
 - ABI APK: ARM64 (`arm64-v8a`) dan ARMv7 (`armeabi-v7a`); x86/x86_64 tidak disertakan.
 - Build CI: `gradle --no-daemon :app:assembleDebug`; GitHub Actions menyalin hasilnya sebagai `Marka.apk` dan mengunggah artefak `Marka-1.8.0`.
+- Catatan penandatanganan: artefak CI tersebut masih ditandatangani dengan debug key untuk pengujian. Sebelum distribusi produksi atau pembaruan instalasi yang sudah ada, diperlukan release keystore permanen yang konsisten.
 - Tes unit: `gradle --no-daemon :app:testDebugUnitTest`
 - Android lint: `gradle --no-daemon :app:lintDebug`
 
