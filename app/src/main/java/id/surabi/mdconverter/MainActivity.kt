@@ -28,6 +28,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
@@ -598,27 +600,67 @@ class MainActivity : ComponentActivity() {
             }
 
             preview?.let { item ->
-                AlertDialog(
+                Dialog(
                     onDismissRequest = { preview = null },
-                    title = { Text(if (item.id == -1L) "Preview Markdown Gabungan" else "Preview Markdown") },
-                    text = {
-                        Column(Modifier.heightIn(max = 460.dp)) {
-                            Text(item.name, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.height(8.dp))
-                            MarkdownPreview(item.markdown, Modifier.heightIn(max = 390.dp).fillMaxWidth())
+                    properties = DialogProperties(usePlatformDefaultWidth = false)
+                ) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize().padding(8.dp),
+                        shape = RoundedCornerShape(18.dp),
+                        color = Color(0xFFF4F7F5)
+                    ) {
+                        Column(Modifier.fillMaxSize()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        if (item.id == -1L) "Pratinjau dokumen gabungan" else "Pratinjau hasil konversi",
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF203D36)
+                                    )
+                                    Text(
+                                        item.name + " • " + item.format.uppercase(),
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF64756D),
+                                        maxLines = 1
+                                    )
+                                }
+                                IconButton(onClick = { preview = null }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Tutup pratinjau")
+                                }
+                            }
+                            HorizontalDivider(color = Color(0xFFDCE5DF))
+                            MarkdownPreview(
+                                markdown = item.markdown,
+                                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                                documentName = item.name,
+                                sourceFormat = item.format,
+                                warnings = item.warnings
+                            )
+                            HorizontalDivider(color = Color(0xFFDCE5DF))
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(onClick = { preview = null }) {
+                                    Text("Tutup")
+                                }
+                                Button(onClick = {
+                                    pendingMarkdown = item.markdown
+                                    pendingFile = null
+                                    pendingMergeFiles = null
+                                    pendingName = MarkdownFileNames.fromSource(item.name)
+                                    saver.launch(pendingName)
+                                }) {
+                                    Text("Ekspor .md")
+                                }
+                            }
                         }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            pendingMarkdown = item.markdown
-                            pendingFile = null
-                            pendingMergeFiles = null
-                            pendingName = MarkdownFileNames.fromSource(item.name)
-                            saver.launch(pendingName)
-                        }) { Text("Ekspor .md") }
-                    },
-                    dismissButton = { TextButton(onClick = { preview = null }) { Text("Tutup") } }
-                )
+                    }
+                }
             }
         }
     }
