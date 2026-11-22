@@ -178,7 +178,7 @@ internal fun MarkdownPreview(
                                                 val target = headingPositions[index]
                                                 if (target != null) scope.launch { scrollState.animateScrollTo(target.coerceAtLeast(0)) }
                                             }
-                                            .padding(start = ((heading.level - 1).coerceAtMost(5) * 10).dp, vertical = 3.dp),
+                                            .padding(start = ((heading.level - 1).coerceAtMost(5) * 10).dp, top = 3.dp, bottom = 3.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text("›", color = PaperGreen, fontSize = 13.sp, modifier = Modifier.padding(end = 7.dp))
