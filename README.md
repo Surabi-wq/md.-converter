@@ -121,7 +121,7 @@ Pemrosesan dan riwayat dilakukan secara lokal. File asli tidak diubah dan tidak 
 - JDK: 17
 - Gradle: 8.9
 - ABI APK: ARM64 (`arm64-v8a`) dan ARMv7 (`armeabi-v7a`); x86/x86_64 tidak disertakan.
-- Build debug: `gradle --no-daemon :app:assembleDebug`
+- Build CI: `gradle --no-daemon :app:assembleDebug`; GitHub Actions menyalin hasilnya sebagai `Marka.apk` dan mengunggah artefak `Marka-1.8.0`.
 - Tes unit: `gradle --no-daemon :app:testDebugUnitTest`
 - Android lint: `gradle --no-daemon :app:lintDebug`
 
