@@ -339,12 +339,7 @@ object ConverterEngine {
         require(clean.isNotEmpty()) { "Tabel kosong." }
         val width = clean.maxOf { it.size }
         val normalized = clean.map { it + List(width - it.size) { "" } }
-        fun render(r: List<String>) = "| " + r.joinToString(" | ") { it.trim().replace("|", "\\|").replace("\n", "<br>") } + " |"
-        return buildString {
-            appendLine(render(normalized.first()))
-            appendLine("| " + List(width) { "---" }.joinToString(" | ") + " |")
-            normalized.drop(1).forEach { appendLine(render(it)) }
-        }.trimEnd()
+        return MarkdownTableRenderer.render(normalized)
     }
 
     private fun html(value: String): String {
@@ -373,20 +368,7 @@ object ConverterEngine {
             if (htmlRows.isEmpty()) {
                 "\n"
             } else {
-                val width = htmlRows.maxOf { it.size }
-                val normalized = htmlRows.map { row -> row + List(width - row.size) { "" } }
-                fun renderRow(row: List<String>) =
-                    "| " + row.joinToString(" | ") {
-                        it.replace("|", "\\|").replace("\n", "<br>")
-                    } + " |"
-
-                buildString {
-                    appendLine()
-                    appendLine(renderRow(normalized.first()))
-                    appendLine("| " + List(width) { "---" }.joinToString(" | ") + " |")
-                    normalized.drop(1).forEach { appendLine(renderRow(it)) }
-                    appendLine()
-                }
+                "\n\n" + MarkdownTableRenderer.render(htmlRows) + "\n\n"
             }
         }
 
@@ -810,7 +792,7 @@ object ConverterEngine {
                     }
                     "tbl" -> if (inTable) {
                         if (tableRows.isNotEmpty()) {
-                            result.append(markdownTable(tableRows)).append("\n\n")
+                            result.append(MarkdownTableRenderer.render(tableRows)).append("\n\n")
                         }
                         if (truncatedRows) {
                             warnings.add("DOCX: baris tabel setelah 5.000 baris pada sebuah tabel tidak ditampilkan.")
@@ -829,21 +811,6 @@ object ConverterEngine {
             "DOCX: paragraf, heading, dan tabel sederhana diekstrak. Gambar, catatan kaki, header/footer, format teks, dan tata letak halaman belum dipertahankan."
         )
         return result.toString().trim()
-    }
-
-    private fun markdownTable(rows: List<List<String>>): String {
-        val width = rows.maxOfOrNull { it.size }?.coerceAtMost(256) ?: return ""
-        if (width == 0) return ""
-        val normalized = rows.map { row -> row.take(width) + List((width - row.size).coerceAtLeast(0)) { "" } }
-        fun render(row: List<String>) = "| " + row.joinToString(" | ") {
-            it.trim().replace("|", "\\\\|").replace("\n", "<br>")
-        } + " |"
-
-        return buildString {
-            appendLine(render(normalized.first()))
-            appendLine("| " + List(width) { "---" }.joinToString(" | ") + " |")
-            normalized.drop(1).forEach { appendLine(render(it)) }
-        }.trimEnd()
     }
 
 
