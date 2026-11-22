@@ -86,6 +86,14 @@ Deteksi format menggunakan kombinasi signature file, MIME dari Android, dan ekst
 - CSV mencoba mendeteksi pemisah koma, titik koma, tab, dan pipe. JSON/JSONL kini menerima nilai primitif seperti string, angka, boolean, dan null.
 - Signature AAC ADTS, frame MPEG audio, dan Opus di dalam Ogg dibedakan lebih baik.
 
+## Tampilan dan struktur hasil konversi pada 1.8.0
+
+- Semua hasil dibuka pada pembaca dokumen yang sama: latar pembaca netral, lembar dokumen putih, lebar baca yang dibatasi, tipografi berjenjang, dan jarak antarbagian yang konsisten. Tampilan ini berlaku untuk sumber PDF, DOCX, spreadsheet, presentasi, HTML, teks, source code, gambar/OCR, audio, dan video karena semuanya ditampilkan melalui hasil Markdown.
+- Pembaca layar penuh memudahkan pemeriksaan dokumen panjang. Heading, paragraf, daftar, tabel, kutipan, blok kode, pemformatan inline, nama file, dan format sumber dibedakan secara visual.
+- Peringatan ekstraksi ditampilkan di atas lembar dokumen agar konten yang dipotong, OCR yang tidak pasti, atau struktur yang belum dipertahankan tidak tersembunyi.
+- CSV, HTML, DOCX, XLSX, dan ODS menggunakan satu renderer tabel Markdown yang sama. DOCX kini mengekstrak tabel sederhana hingga 5.000 baris dan 256 kolom per tabel; HTML mempertahankan heading H1–H6, daftar, kutipan, pemisah, dan tabel sederhana.
+- Pratinjau menyerupai lembar dokumen PDF, tetapi bukan salinan tata letak halaman PDF asli. Markdown tidak dapat mempertahankan seluruh font, warna, posisi objek, gambar tertanam, animasi, rumus spreadsheet, atau layout kompleks. Batasan format sumber tetap dilaporkan sebagai peringatan.
+
 ## Batasan yang diketahui
 
 - PDF diproses per halaman. Halaman hasil scan atau halaman campuran yang lapisan teksnya kosong/pendek dapat menjalani OCR lokal maksimal 50 halaman yang memerlukan OCR. PDF di atas 1.000 halaman tidak diproses seluruhnya.
