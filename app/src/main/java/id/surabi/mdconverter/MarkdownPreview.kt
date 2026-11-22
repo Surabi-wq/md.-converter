@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,6 +57,16 @@ internal fun MarkdownPreview(
     val scrollState = rememberScrollState()
     val headingPositions = remember(markdown) { mutableStateMapOf<Int, Int>() }
     val scope = rememberCoroutineScope()
+    val searchExpanded = remember(markdown) { mutableStateOf(false) }
+    val searchQuery = remember(markdown) { mutableStateOf("") }
+    val selectedSearchMatch = remember(markdown) { mutableStateOf(0) }
+    val searchMatches = remember(markdown, searchQuery.value, blocks) {
+        val query = searchQuery.value.trim()
+        if (query.isBlank()) emptyList()
+        else blocks.mapIndexedNotNull { index, block ->
+            index.takeIf { block.searchableText().contains(query, ignoreCase = true) }
+        }
+    }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -140,6 +151,78 @@ internal fun MarkdownPreview(
                         )
                     }
                     HorizontalDivider(color = PaperLine, thickness = 1.dp)
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { searchExpanded.value = !searchExpanded.value },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            if (searchExpanded.value) "TUTUP PENCARIAN" else "CARI DI DOKUMEN",
+                            color = PaperGreen,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.8.sp
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            if (searchExpanded.value) "−" else "⌕",
+                            color = PaperGreen,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    if (searchExpanded.value) {
+                        OutlinedTextField(
+                            value = searchQuery.value,
+                            onValueChange = {
+                                searchQuery.value = it
+                                selectedSearchMatch.value = 0
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("Cari kata atau frasa") },
+                            placeholder = { Text("Contoh: kesimpulan, total, tanggal") }
+                        )
+                        if (searchQuery.value.isNotBlank()) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    if (searchMatches.isEmpty()) "Tidak ditemukan"
+                                    else "Hasil ${selectedSearchMatch.value + 1} dari ${searchMatches.size}",
+                                    color = PaperMuted,
+                                    fontSize = 10.sp
+                                )
+                                Spacer(Modifier.weight(1f))
+                                Text(
+                                    "‹ Sebelumnya",
+                                    modifier = Modifier.clickable {
+                                        if (searchMatches.isNotEmpty()) {
+                                            val next = (selectedSearchMatch.value - 1 + searchMatches.size) % searchMatches.size
+                                            selectedSearchMatch.value = next
+                                            headingPositions[searchMatches[next]]?.let { target ->
+                                                scope.launch { scrollState.animateScrollTo(target.coerceAtLeast(0)) }
+                                            }
+                                        }
+                                    }.padding(6.dp),
+                                    color = PaperGreen,
+                                    fontSize = 10.sp
+                                )
+                                Text(
+                                    "Berikutnya ›",
+                                    modifier = Modifier.clickable {
+                                        if (searchMatches.isNotEmpty()) {
+                                            val next = (selectedSearchMatch.value + 1) % searchMatches.size
+                                            selectedSearchMatch.value = next
+                                            headingPositions[searchMatches[next]]?.let { target ->
+                                                scope.launch { scrollState.animateScrollTo(target.coerceAtLeast(0)) }
+                                            }
+                                        }
+                                    }.padding(6.dp),
+                                    color = PaperGreen,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
 
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
@@ -470,4 +553,16 @@ private fun InsightMetric(value: String, label: String, modifier: Modifier = Mod
         Text(value, color = PaperInk, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         Text(label, color = PaperMuted, fontSize = 8.sp, letterSpacing = 0.6.sp, maxLines = 1)
     }
+}
+
+
+private fun MarkdownBlock.searchableText(): String = when (this) {
+    is MarkdownBlock.Heading -> text
+    is MarkdownBlock.Paragraph -> text
+    is MarkdownBlock.BulletList -> items.joinToString(" ")
+    is MarkdownBlock.NumberedList -> items.joinToString(" ")
+    is MarkdownBlock.Code -> content
+    is MarkdownBlock.Quote -> text
+    is MarkdownBlock.Table -> rows.flatten().joinToString(" ")
+    MarkdownBlock.Rule -> ""
 }
