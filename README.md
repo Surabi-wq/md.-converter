@@ -121,7 +121,7 @@ Pemrosesan dan riwayat dilakukan secara lokal. File asli tidak diubah dan tidak 
 - JDK: 17
 - Gradle: 8.9
 - ABI APK: ARM64 (`arm64-v8a`) dan ARMv7 (`armeabi-v7a`); x86/x86_64 tidak disertakan.
-- Build CI: `gradle --no-daemon :app:assembleDebug`; GitHub Actions menyalin hasilnya sebagai `Marka.apk` dan mengunggah artefak `Marka-1.8.0`.
+- Build CI: `gradle --no-daemon :app:assembleDebug`; GitHub Actions menyalin hasilnya sebagai `Marka.apk` dan mengunggah artefak `Marka-1.8.1`.
 - Catatan penandatanganan: artefak CI tersebut masih ditandatangani dengan debug key untuk pengujian. Sebelum distribusi produksi atau pembaruan instalasi yang sudah ada, diperlukan release keystore permanen yang konsisten.
 - Tes unit: `gradle --no-daemon :app:testDebugUnitTest`
 - Android lint: `gradle --no-daemon :app:lintDebug`
@@ -134,4 +134,5 @@ GitHub Actions menjalankan tes unit, lint, dan build debug pada push ke `main` s
 - Preview menampilkan ringkasan jumlah kata, bagian, tabel, dan estimasi waktu baca.
 - Daftar isi otomatis dibangun dari heading Markdown dan dapat ditekan untuk berpindah ke bagian terkait.
 - Navigasi daftar isi dibatasi hingga 20 heading pertama agar dokumen panjang tetap ringan; bagian tambahan tetap dapat dibaca melalui isi dokumen.
+- Pencarian di dalam dokumen menampilkan jumlah kecocokan dan menyediakan navigasi ke bagian sebelumnya/berikutnya.
 - Pipeline CI menjalankan tes unit dan Android lint sebelum membangun APK.
