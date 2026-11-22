@@ -348,12 +348,67 @@ object ConverterEngine {
     }
 
     private fun html(value: String): String {
-        val clean = value.replace(Regex("(?is)<(script|style|noscript)[^>]*>.*?</\\1\\s*>"), "")
-            .replace(Regex("(?i)<(h[1-6])\\b[^>]*>"), "\n\n### ")
+        val safeSource = value.replace(
+            Regex("(?is)<(script|style|noscript)[^>]*>.*?</\\1\\s*>"),
+            ""
+        )
+        val tablePattern = Regex("(?is)<table\\b[^>]*>(.*?)</table>")
+        val withMarkdownTables = tablePattern.replace(safeSource) { tableMatch ->
+            val htmlRows = Regex("(?is)<tr\\b[^>]*>(.*?)</tr>")
+                .findAll(tableMatch.groupValues[1])
+                .map { rowMatch ->
+                    Regex("(?is)<t[dh]\\b[^>]*>(.*?)</t[dh]>")
+                        .findAll(rowMatch.groupValues[1])
+                        .map { cell ->
+                            Html.fromHtml(cell.groupValues[1], Html.FROM_HTML_MODE_COMPACT)
+                                .toString()
+                                .replace(Regex("\\s+"), " ")
+                                .trim()
+                        }
+                        .toList()
+                }
+                .filter { it.isNotEmpty() }
+                .toList()
+
+            if (htmlRows.isEmpty()) {
+                "\n"
+            } else {
+                val width = htmlRows.maxOf { it.size }
+                val normalized = htmlRows.map { row -> row + List(width - row.size) { "" } }
+                fun renderRow(row: List<String>) =
+                    "| " + row.joinToString(" | ") {
+                        it.replace("|", "\\|").replace("\n", "<br>")
+                    } + " |"
+
+                buildString {
+                    appendLine()
+                    appendLine(renderRow(normalized.first()))
+                    appendLine("| " + List(width) { "---" }.joinToString(" | ") + " |")
+                    normalized.drop(1).forEach { appendLine(renderRow(it)) }
+                    appendLine()
+                }
+            }
+        }
+
+        val markedUp = withMarkdownTables
+            .replace(Regex("(?i)<h([1-6])\\b[^>]*>")) { match ->
+                "\n\n" + "#".repeat(match.groupValues[1].toInt()) + " "
+            }
+            .replace(Regex("(?i)</h[1-6]\\s*>"), "\n\n")
+            .replace(Regex("(?i)<p\\b[^>]*>"), "\n\n")
+            .replace(Regex("(?i)</p\\s*>"), "\n\n")
             .replace(Regex("(?i)<li\\b[^>]*>"), "\n- ")
-            .replace(Regex("(?i)</(p|div|section|article|li|tr|h[1-6]|br|hr)\\s*>"), "\n")
-        return Html.fromHtml(clean, Html.FROM_HTML_MODE_COMPACT).toString()
-            .replace(Regex("[ \t]+"), " ").replace(Regex("\\n{3,}"), "\n\n").trim()
+            .replace(Regex("(?i)</li\\s*>"), "\n")
+            .replace(Regex("(?i)<blockquote\\b[^>]*>"), "\n\n> ")
+            .replace(Regex("(?i)</blockquote\\s*>"), "\n\n")
+            .replace(Regex("(?i)<br\\b[^>]*>"), "\n")
+            .replace(Regex("(?i)<hr\\b[^>]*>"), "\n\n---\n\n")
+            .replace(Regex("(?i)</(div|section|article|ul|ol)\\s*>"), "\n\n")
+
+        return Html.fromHtml(markedUp, Html.FROM_HTML_MODE_COMPACT).toString()
+            .replace(Regex("[ \\t]+"), " ")
+            .replace(Regex("\\n{3,}"), "\n\n")
+            .trim()
     }
 
     private fun rtf(value: String): String = value
@@ -651,7 +706,7 @@ object ConverterEngine {
                     entrySize += count
                     totalUncompressed += count
                     require(entrySize <= if (isDocumentXml) 20L * 1024 * 1024 else 32L * 1024 * 1024) {
-                        "Konten arsip DOCX terlalu besar pada ${entry.name}."
+                        "Konten arsip DOCX terlalu besar pada \${entry.name}."
                     }
                     require(totalUncompressed <= 64L * 1024 * 1024) {
                         "Total data hasil dekompresi DOCX melebihi 64 MB."
@@ -664,43 +719,132 @@ object ConverterEngine {
                 }
             }
         }
+
         val source = xml ?: error("DOCX tidak valid: document.xml tidak ditemukan.")
         val parser = Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
         runCatching { parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) }
         parser.setInput(source.reader())
+
         val result = StringBuilder()
         var paragraph = StringBuilder()
         var inParagraph = false
         var inText = false
         var style = ""
+        var inTable = false
+        var inRow = false
+        var inCell = false
+        var cell = StringBuilder()
+        var row = mutableListOf<String>()
+        var tableRows = mutableListOf<List<String>>()
+        var truncatedRows = false
+        var truncatedColumns = false
+        val maxTableRows = 5_000
+        val maxTableColumns = 256
+
         var event = parser.eventType
         while (event != XmlPullParser.END_DOCUMENT) {
             when (event) {
                 XmlPullParser.START_TAG -> when (parser.name) {
-                    "p" -> { inParagraph = true; paragraph = StringBuilder(); style = "" }
-                    "pStyle" -> style = parser.getAttributeValue("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "val") ?: parser.getAttributeValue(null, "val") ?: ""
+                    "tbl" -> {
+                        inTable = true
+                        tableRows = mutableListOf()
+                        truncatedRows = false
+                        truncatedColumns = false
+                    }
+                    "tr" -> if (inTable) {
+                        inRow = true
+                        row = mutableListOf()
+                    }
+                    "tc" -> if (inTable && inRow) {
+                        inCell = true
+                        cell = StringBuilder()
+                    }
+                    "p" -> {
+                        inParagraph = true
+                        paragraph = StringBuilder()
+                        style = ""
+                    }
+                    "pStyle" -> style =
+                        parser.getAttributeValue("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "val")
+                            ?: parser.getAttributeValue(null, "val")
+                            ?: ""
                     "t" -> inText = true
                     "tab" -> if (inParagraph) paragraph.append("    ")
                     "br", "cr" -> if (inParagraph) paragraph.append('\n')
                 }
+
                 XmlPullParser.TEXT -> if (inParagraph && inText) paragraph.append(parser.text)
+
                 XmlPullParser.END_TAG -> when (parser.name) {
                     "t" -> inText = false
                     "p" -> {
                         val value = paragraph.toString().trim()
                         if (value.isNotEmpty()) {
-                            val heading = Regex("(?i)^heading([1-6])$").matchEntire(style)
-                            if (heading != null) result.append("#".repeat(heading.groupValues[1].toInt())).append(' ').append(value).append("\n\n")
-                            else result.append(value).append("\n\n")
+                            if (inTable && inCell) {
+                                if (cell.isNotEmpty()) cell.append(' ')
+                                cell.append(value)
+                            } else {
+                                val heading = Regex("(?i)^heading([1-6])$").matchEntire(style)
+                                if (heading != null) {
+                                    result.append("#".repeat(heading.groupValues[1].toInt()))
+                                        .append(' ').append(value).append("\n\n")
+                                } else {
+                                    result.append(value).append("\n\n")
+                                }
+                            }
                         }
                         inParagraph = false
+                    }
+                    "tc" -> if (inTable && inCell) {
+                        if (row.size < maxTableColumns) row.add(cell.toString().trim())
+                        else truncatedColumns = true
+                        inCell = false
+                    }
+                    "tr" -> if (inTable && inRow) {
+                        if (row.isNotEmpty()) {
+                            if (tableRows.size < maxTableRows) tableRows.add(row.toList())
+                            else truncatedRows = true
+                        }
+                        inRow = false
+                    }
+                    "tbl" -> if (inTable) {
+                        if (tableRows.isNotEmpty()) {
+                            result.append(markdownTable(tableRows)).append("\n\n")
+                        }
+                        if (truncatedRows) {
+                            warnings.add("DOCX: baris tabel setelah 5.000 baris pada sebuah tabel tidak ditampilkan.")
+                        }
+                        if (truncatedColumns) {
+                            warnings.add("DOCX: kolom tabel setelah kolom ke-256 tidak ditampilkan.")
+                        }
+                        inTable = false
                     }
                 }
             }
             event = parser.next()
         }
-        warnings.add("DOCX: teks paragraf dan heading dasar diekstrak; tabel, gambar, catatan kaki, header/footer, dan tata letak belum dipertahankan.")
+
+        warnings.add(
+            "DOCX: paragraf, heading, dan tabel sederhana diekstrak. Gambar, catatan kaki, header/footer, format teks, dan tata letak halaman belum dipertahankan."
+        )
         return result.toString().trim()
     }
+
+    private fun markdownTable(rows: List<List<String>>): String {
+        val width = rows.maxOfOrNull { it.size }?.coerceAtMost(256) ?: return ""
+        if (width == 0) return ""
+        val normalized = rows.map { row -> row.take(width) + List((width - row.size).coerceAtLeast(0)) { "" } }
+        fun render(row: List<String>) = "| " + row.joinToString(" | ") {
+            it.trim().replace("|", "\\\\|").replace("\n", "<br>")
+        } + " |"
+
+        return buildString {
+            appendLine(render(normalized.first()))
+            appendLine("| " + List(width) { "---" }.joinToString(" | ") + " |")
+            normalized.drop(1).forEach { appendLine(render(it)) }
+        }.trimEnd()
+    }
+
+
 }
