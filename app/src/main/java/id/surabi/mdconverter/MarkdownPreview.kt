@@ -22,13 +22,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -57,12 +56,13 @@ internal fun MarkdownPreview(
     val insights = remember(markdown, blocks) { MarkdownDocumentInsightsCalculator.calculate(blocks) }
     val scrollState = rememberScrollState()
     val headingPositions = remember(markdown) { mutableStateMapOf<Int, Int>() }
+    val viewportTop = remember(markdown) { mutableStateMapOf("value" to 0) }
     val scope = rememberCoroutineScope()
-    val searchExpanded = remember(markdown) { mutableStateOf(false) }
-    val searchQuery = remember(markdown) { mutableStateOf("") }
-    val selectedSearchMatch = remember(markdown) { mutableStateOf(0) }
-    val searchMatches = remember(markdown, searchQuery.value, blocks) {
-        val query = searchQuery.value.trim()
+    val searchExpanded = remember(markdown) { mutableStateMapOf("value" to false) }
+    val searchQuery = remember(markdown) { mutableStateMapOf("value" to "") }
+    val selectedSearchMatch = remember(markdown) { mutableStateMapOf("value" to 0) }
+    val searchMatches = remember(markdown, searchQuery["value"], blocks) {
+        val query = searchQuery["value"].orEmpty().trim()
         if (query.isBlank()) emptyList()
         else blocks.mapIndexedNotNull { index, block ->
             index.takeIf { block.searchableText().contains(query, ignoreCase = true) }
@@ -78,6 +78,7 @@ internal fun MarkdownPreview(
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(scrollState)
+                .onGloballyPositioned { viewportTop["value"] = it.positionInRoot().y.toInt() }
                 .padding(horizontal = 12.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -154,7 +155,7 @@ internal fun MarkdownPreview(
                     HorizontalDivider(color = PaperLine, thickness = 1.dp)
 
                     Row(
-                        modifier = Modifier.fillMaxWidth().clickable { searchExpanded.value = !searchExpanded.value },
+                        modifier = Modifier.fillMaxWidth().clickable { searchExpanded["value"] = !searchExpanded.value },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
@@ -174,10 +175,10 @@ internal fun MarkdownPreview(
                     }
                     if (searchExpanded.value) {
                         OutlinedTextField(
-                            value = searchQuery.value,
+                            value = searchQuery.getValue("value"),
                             onValueChange = {
                                 searchQuery.value = it
-                                selectedSearchMatch.value = 0
+                                selectedSearchMatch["value"] = 0
                             },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
@@ -284,9 +285,9 @@ internal fun MarkdownPreview(
                         blocks.forEachIndexed { blockIndex, block ->
                             Column(
                                 modifier = Modifier.fillMaxWidth().onGloballyPositioned { coordinates ->
-                                    if (scrollState.value == 0) {
-                                        headingPositions[blockIndex] = coordinates.positionInParent().y.toInt()
-                                    }
+                                    headingPositions[blockIndex] = (
+                                        scrollState.value + coordinates.positionInRoot().y.toInt() - viewportTop.getValue("value")
+                                    ).coerceAtLeast(0)
                                 }
                             ) {
                             when (block) {
