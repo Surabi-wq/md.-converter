@@ -155,11 +155,11 @@ internal fun MarkdownPreview(
                     HorizontalDivider(color = PaperLine, thickness = 1.dp)
 
                     Row(
-                        modifier = Modifier.fillMaxWidth().clickable { searchExpanded["value"] = !searchExpanded.value },
+                        modifier = Modifier.fillMaxWidth().clickable { searchExpanded["value"] = !searchExpanded.getValue("value") },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            if (searchExpanded.value) "TUTUP PENCARIAN" else "CARI DI DOKUMEN",
+                            if (searchExpanded.getValue("value")) "TUTUP PENCARIAN" else "CARI DI DOKUMEN",
                             color = PaperGreen,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
@@ -167,17 +167,17 @@ internal fun MarkdownPreview(
                         )
                         Spacer(Modifier.weight(1f))
                         Text(
-                            if (searchExpanded.value) "−" else "⌕",
+                            if (searchExpanded.getValue("value")) "−" else "⌕",
                             color = PaperGreen,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    if (searchExpanded.value) {
+                    if (searchExpanded.getValue("value")) {
                         OutlinedTextField(
                             value = searchQuery.getValue("value"),
                             onValueChange = {
-                                searchQuery.value = it
+                                searchQuery["value"] = it
                                 selectedSearchMatch["value"] = 0
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -185,11 +185,11 @@ internal fun MarkdownPreview(
                             label = { Text("Cari kata atau frasa") },
                             placeholder = { Text("Contoh: kesimpulan, total, tanggal") }
                         )
-                        if (searchQuery.value.isNotBlank()) {
+                        if (searchQuery.getValue("value").isNotBlank()) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     if (searchMatches.isEmpty()) "Tidak ditemukan"
-                                    else "Hasil ${selectedSearchMatch.value + 1} dari ${searchMatches.size}",
+                                    else "Hasil ${selectedSearchMatch.getValue("value") + 1} dari ${searchMatches.size}",
                                     color = PaperMuted,
                                     fontSize = 10.sp
                                 )
@@ -198,8 +198,8 @@ internal fun MarkdownPreview(
                                     "‹ Sebelumnya",
                                     modifier = Modifier.clickable {
                                         if (searchMatches.isNotEmpty()) {
-                                            val next = (selectedSearchMatch.value - 1 + searchMatches.size) % searchMatches.size
-                                            selectedSearchMatch.value = next
+                                            val next = (selectedSearchMatch.getValue("value") - 1 + searchMatches.size) % searchMatches.size
+                                            selectedSearchMatch["value"] = next
                                             headingPositions[searchMatches[next]]?.let { target ->
                                                 scope.launch { scrollState.animateScrollTo(target.coerceAtLeast(0)) }
                                             }
@@ -212,8 +212,8 @@ internal fun MarkdownPreview(
                                     "Berikutnya ›",
                                     modifier = Modifier.clickable {
                                         if (searchMatches.isNotEmpty()) {
-                                            val next = (selectedSearchMatch.value + 1) % searchMatches.size
-                                            selectedSearchMatch.value = next
+                                            val next = (selectedSearchMatch.getValue("value") + 1) % searchMatches.size
+                                            selectedSearchMatch["value"] = next
                                             headingPositions[searchMatches[next]]?.let { target ->
                                                 scope.launch { scrollState.animateScrollTo(target.coerceAtLeast(0)) }
                                             }
