@@ -342,9 +342,9 @@ internal fun MarkdownPreview(
 private fun inlineMarkdown(value: String) = buildAnnotatedString {
     val codeDelimiter = 96.toChar()
     val pattern = Regex(
-        "(!?\\\\[[^]]+\\\\]\\\\([^)]+\\\\)|" +
+        "(!?\\[[^]]+\\]\\([^)]+\\)|" +
             codeDelimiter + "[^" + codeDelimiter + "]+" + codeDelimiter +
-            "|\\\\*\\\\*[^*]+\\\\*\\\\*|~~[^~]+~~|\\\\*[^*]+\\\\*)"
+            "|\\*\\*[^*]+\\*\\*|~~[^~]+~~|\\*[^*]+\\*)"
     )
     var cursor = 0
     pattern.findAll(value).forEach { match ->
