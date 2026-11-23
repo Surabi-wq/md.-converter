@@ -522,9 +522,9 @@ private fun inlineMarkdown(value: String, searchQuery: String = "") = buildAnnot
 
     val codeDelimiter = 96.toChar()
     val pattern = Regex(
-        "(!?\\\\[[^]]+\\\\]\\\\([^)]+\\\\)|" +
+        "(!?\\[[^]]+\\]\\([^)]+\\)|" +
             codeDelimiter + "[^" + codeDelimiter + "]+" + codeDelimiter +
-            "|\\\\*\\\\*[^*]+\\\\*\\\\*|~~[^~]+~~|\\\\*[^*]+\\\\*)"
+            "|\\*\\*[^*]+\\*\\*|~~[^~]+~~|\\*[^*]+\\*)"
     )
     var cursor = 0
     pattern.findAll(value).forEach { match ->
