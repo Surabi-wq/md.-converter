@@ -19,6 +19,15 @@ internal object DocumentStorage {
         return uri.takeIf { granted }
     }
 
+    fun releaseReadPermission(context: Context, uri: Uri) {
+        runCatching {
+            context.contentResolver.releasePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+    }
+
     fun queryName(context: Context, uri: Uri): String {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
@@ -39,6 +48,26 @@ internal object DocumentStorage {
             (context.contentResolver.openOutputStream(output, "wt")
                 ?: error("Tidak dapat membuka file keluaran."))
                 .bufferedWriter(Charsets.UTF_8).use { it.write(markdown) }
+            return finalName
+        } catch (error: Exception) {
+            runCatching { DocumentsContract.deleteDocument(context.contentResolver, output) }
+            throw error
+        }
+    }
+
+    fun saveMergedToFolder(context: Context, tree: Uri, requestedName: String, items: List<ConvertedFile>): String {
+        require(items.isNotEmpty()) { "Tidak ada hasil konversi yang dapat digabungkan." }
+        val rootId = DocumentsContract.getTreeDocumentId(tree)
+        val root = DocumentsContract.buildDocumentUriUsingTree(tree, rootId)
+        val finalName = uniqueDocumentName(context, tree, rootId, requestedName)
+        val output = DocumentsContract.createDocument(context.contentResolver, root, "text/markdown", finalName)
+            ?: error("Tidak dapat membuat file pada folder tujuan.")
+        try {
+            val stream = context.contentResolver.openOutputStream(output, "wt")
+                ?: error("Tidak dapat membuka file keluaran.")
+            stream.bufferedWriter(Charsets.UTF_8).use { writer ->
+                MarkdownMerger.writeTo(items, writer)
+            }
             return finalName
         } catch (error: Exception) {
             runCatching { DocumentsContract.deleteDocument(context.contentResolver, output) }

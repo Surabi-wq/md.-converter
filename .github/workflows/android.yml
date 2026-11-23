@@ -19,10 +19,19 @@ jobs:
      with: { distribution: temurin, java-version: '17' }
    - uses: gradle/actions/setup-gradle@v4
      with: { gradle-version: '8.9' }
-   - run: gradle --no-daemon :app:assembleDebug
+   - name: Unit tests
+     run: gradle --no-daemon :app:testDebugUnitTest
+   - name: Android lint
+     run: gradle --no-daemon :app:lintDebug
+   - name: Build debug APK
+     run: gradle --no-daemon :app:assembleDebug
+   - name: Rename installable APK to Marka.apk
+     run: |
+      test -s app/build/outputs/apk/debug/app-debug.apk
+      cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/Marka.apk
    - uses: actions/upload-artifact@v4
      with:
-      name: marka-file-to-markdown-debug
-      path: app/build/outputs/apk/debug/app-debug.apk
+      name: Marka-1.8.1
+      path: app/build/outputs/apk/debug/Marka.apk
       if-no-files-found: error
       retention-days: 14

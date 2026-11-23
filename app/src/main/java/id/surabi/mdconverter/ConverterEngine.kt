@@ -32,6 +32,8 @@ data class ConversionResult(val markdown: String, val format: String, val warnin
 object ConverterEngine {
     private const val MAX_BYTES = 64L * 1024 * 1024
     private const val MAX_PDF_OCR_PAGES = 50
+    private const val MAX_PDF_PAGES = 1000
+    private const val MIN_TEXT_LAYER_CHARS_BEFORE_OCR = 24
     private val imageTypes = SupportedFormats.imageTypes
     private val audioTypes = SupportedFormats.audioTypes
     private val videoTypes = SupportedFormats.videoTypes
@@ -337,21 +339,58 @@ object ConverterEngine {
         require(clean.isNotEmpty()) { "Tabel kosong." }
         val width = clean.maxOf { it.size }
         val normalized = clean.map { it + List(width - it.size) { "" } }
-        fun render(r: List<String>) = "| " + r.joinToString(" | ") { it.trim().replace("|", "\\|").replace("\n", "<br>") } + " |"
-        return buildString {
-            appendLine(render(normalized.first()))
-            appendLine("| " + List(width) { "---" }.joinToString(" | ") + " |")
-            normalized.drop(1).forEach { appendLine(render(it)) }
-        }.trimEnd()
+        return MarkdownTableRenderer.render(normalized)
     }
 
     private fun html(value: String): String {
-        val clean = value.replace(Regex("(?is)<(script|style|noscript)[^>]*>.*?</\\1\\s*>"), "")
-            .replace(Regex("(?i)<(h[1-6])\\b[^>]*>"), "\n\n### ")
+        val safeSource = value.replace(
+            Regex("(?is)<(script|style|noscript)[^>]*>.*?</\\1\\s*>"),
+            ""
+        )
+        val tablePattern = Regex("(?is)<table\\b[^>]*>(.*?)</table>")
+        val withMarkdownTables = tablePattern.replace(safeSource) { tableMatch ->
+            val htmlRows = Regex("(?is)<tr\\b[^>]*>(.*?)</tr>")
+                .findAll(tableMatch.groupValues[1])
+                .map { rowMatch ->
+                    Regex("(?is)<t[dh]\\b[^>]*>(.*?)</t[dh]>")
+                        .findAll(rowMatch.groupValues[1])
+                        .map { cell ->
+                            Html.fromHtml(cell.groupValues[1], Html.FROM_HTML_MODE_COMPACT)
+                                .toString()
+                                .replace(Regex("\\s+"), " ")
+                                .trim()
+                        }
+                        .toList()
+                }
+                .filter { it.isNotEmpty() }
+                .toList()
+
+            if (htmlRows.isEmpty()) {
+                "\n"
+            } else {
+                "\n\n" + MarkdownTableRenderer.render(htmlRows) + "\n\n"
+            }
+        }
+
+        val markedUp = withMarkdownTables
+            .replace(Regex("(?i)<h([1-6])\\b[^>]*>")) { match ->
+                "\n\n" + "#".repeat(match.groupValues[1].toInt()) + " "
+            }
+            .replace(Regex("(?i)</h[1-6]\\s*>"), "\n\n")
+            .replace(Regex("(?i)<p\\b[^>]*>"), "\n\n")
+            .replace(Regex("(?i)</p\\s*>"), "\n\n")
             .replace(Regex("(?i)<li\\b[^>]*>"), "\n- ")
-            .replace(Regex("(?i)</(p|div|section|article|li|tr|h[1-6]|br|hr)\\s*>"), "\n")
-        return Html.fromHtml(clean, Html.FROM_HTML_MODE_COMPACT).toString()
-            .replace(Regex("[ \t]+"), " ").replace(Regex("\\n{3,}"), "\n\n").trim()
+            .replace(Regex("(?i)</li\\s*>"), "\n")
+            .replace(Regex("(?i)<blockquote\\b[^>]*>"), "\n\n> ")
+            .replace(Regex("(?i)</blockquote\\s*>"), "\n\n")
+            .replace(Regex("(?i)<br\\b[^>]*>"), "\n")
+            .replace(Regex("(?i)<hr\\b[^>]*>"), "\n\n---\n\n")
+            .replace(Regex("(?i)</(div|section|article|ul|ol)\\s*>"), "\n\n")
+
+        return Html.fromHtml(markedUp, Html.FROM_HTML_MODE_COMPACT).toString()
+            .replace(Regex("[ \\t]+"), " ")
+            .replace(Regex("\\n{3,}"), "\n\n")
+            .trim()
     }
 
     private fun rtf(value: String): String = value
@@ -380,7 +419,6 @@ object ConverterEngine {
         val options = BitmapFactory.Options().apply {
             inSampleSize = sample
             inPreferredConfig = if (ext in setOf("jpg", "jpeg")) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
-            inDither = true
         }
         val bitmap = context.contentResolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, options)
@@ -539,6 +577,9 @@ object ConverterEngine {
     private fun pdf(bytes: ByteArray, warnings: MutableList<String>): String {
         PDDocument.load(bytes).use { document ->
             require(!document.isEncrypted) { "PDF terenkripsi atau dilindungi kata sandi." }
+            val pageCount = document.numberOfPages
+            require(pageCount > 0) { "PDF tidak memiliki halaman." }
+
             val stripper = PDFTextStripper().apply {
                 sortByPosition = true
                 addMoreFormatting = true
@@ -546,53 +587,81 @@ object ConverterEngine {
                 paragraphStart = "\n\n"
                 paragraphEnd = "\n"
             }
-            val textLayer = stripper.getText(document).trim()
-            if (textLayer.isNotBlank()) {
-                if (document.numberOfPages > 300) warnings.add("PDF memiliki lebih dari 300 halaman; periksa kelengkapan hasil.")
-                return textLayer
-            }
-
-            val pageCount = document.numberOfPages
-            require(pageCount > 0) { "PDF tidak memiliki halaman." }
-            val pageLimit = minOf(pageCount, MAX_PDF_OCR_PAGES)
             val renderer = PDFRenderer(document)
-            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
             val extracted = StringBuilder()
+            var recognizer: TextRecognizer? = null
+            var ocrPagesAttempted = 0
+            var ocrPagesSkipped = 0
+            val pageLimit = minOf(pageCount, MAX_PDF_PAGES)
+
             try {
                 for (pageIndex in 0 until pageLimit) {
-                    val bitmap = try {
-                        renderer.renderImage(pageIndex, 1.35f)
-                    } catch (error: Exception) {
-                        warnings.add("Halaman PDF ${pageIndex + 1} tidak dapat dirender untuk OCR: ${error.message ?: "kesalahan render"}.")
-                        null
-                    }
-                    if (bitmap != null) {
-                        try {
-                            val pageText = runCatching { recognizeText(bitmap, recognizer) }
-                                .getOrElse { error ->
-                                    warnings.add("OCR halaman PDF ${pageIndex + 1} gagal: ${error.message ?: "tidak didukung"}.")
-                                    ""
-                                }
-                            if (pageText.isNotBlank()) {
-                                extracted.append("## Halaman ").append(pageIndex + 1).append("\n\n")
-                                    .append(pageText).append("\n\n")
-                            }
-                        } finally {
-                            bitmap.recycle()
+                    stripper.startPage = pageIndex + 1
+                    stripper.endPage = pageIndex + 1
+                    val pageText = runCatching { stripper.getText(document).trim() }
+                        .getOrElse { error ->
+                            warnings.add("Teks halaman PDF " + (pageIndex + 1) + " tidak dapat diekstrak: " +
+                                (error.message ?: "kesalahan baca") + ".")
+                            ""
                         }
+
+                    if (pageText.isNotBlank()) extracted.append(pageText).append("\n\n")
+
+                    // Also OCR short fragments: mixed PDFs often have only a selectable page number or header.
+                    if (pageText.length >= MIN_TEXT_LAYER_CHARS_BEFORE_OCR) continue
+                    if (ocrPagesAttempted >= MAX_PDF_OCR_PAGES) {
+                        ocrPagesSkipped++
+                        continue
+                    }
+                    ocrPagesAttempted++
+
+                    val cropBox = document.getPage(pageIndex).cropBox
+                    val scale = PdfPageSizing.renderScale(cropBox.width, cropBox.height)
+                    val bitmap = try {
+                        renderer.renderImage(pageIndex, scale)
+                    } catch (error: Exception) {
+                        warnings.add("Halaman PDF " + (pageIndex + 1) + " tidak dapat dirender untuk OCR: " +
+                            (error.message ?: "kesalahan render") + ".")
+                        null
+                    } ?: continue
+
+                    try {
+                        if (recognizer == null) {
+                            recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                        }
+                        val ocrText = runCatching { recognizeText(bitmap, recognizer) }
+                            .getOrElse { error ->
+                                warnings.add("OCR halaman PDF " + (pageIndex + 1) + " gagal: " +
+                                    (error.message ?: "tidak didukung") + ".")
+                                ""
+                            }
+                        if (ocrText.isNotBlank()) {
+                            extracted.append("### Teks OCR halaman ").append(pageIndex + 1).append("\n\n")
+                                .append(ocrText).append("\n\n")
+                        }
+                    } finally {
+                        bitmap.recycle()
                     }
                 }
             } finally {
-                recognizer.close()
+                recognizer?.close()
             }
 
             if (pageCount > pageLimit) {
-                warnings.add("OCR PDF dibatasi hingga $pageLimit dari $pageCount halaman untuk menjaga memori dan waktu proses.")
+                warnings.add("PDF memiliki " + pageCount + " halaman; hanya " + pageLimit +
+                    " halaman pertama yang diproses untuk menjaga waktu dan memori.")
             }
+            if (ocrPagesSkipped > 0) {
+                warnings.add("OCR PDF dibatasi hingga " + MAX_PDF_OCR_PAGES + " halaman yang memerlukan OCR; " +
+                    ocrPagesSkipped + " halaman tambahan tidak menjalani OCR.")
+            }
+            if (ocrPagesAttempted > 0) {
+                warnings.add("PDF scan atau halaman campuran diproses dengan OCR lokal. Tata letak, tabel kompleks, dan urutan kolom dapat berbeda dari dokumen asli.")
+            }
+
             require(extracted.isNotBlank()) {
-                "PDF tidak memiliki lapisan teks dan OCR tidak menemukan teks pada halaman yang diperiksa."
+                "PDF tidak memiliki teks yang dapat diekstrak dan OCR tidak menemukan teks pada halaman yang diperiksa."
             }
-            warnings.add("PDF hasil scan diproses dengan OCR lokal. Tata letak, tabel kompleks, dan urutan kolom dapat berbeda dari dokumen asli.")
             return extracted.toString().trim()
         }
     }
@@ -632,42 +701,117 @@ object ConverterEngine {
                 }
             }
         }
+
         val source = xml ?: error("DOCX tidak valid: document.xml tidak ditemukan.")
         val parser = Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
+        runCatching { parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) }
         parser.setInput(source.reader())
+
         val result = StringBuilder()
         var paragraph = StringBuilder()
         var inParagraph = false
         var inText = false
         var style = ""
+        var inTable = false
+        var inRow = false
+        var inCell = false
+        var cell = StringBuilder()
+        var row = mutableListOf<String>()
+        var tableRows = mutableListOf<List<String>>()
+        var truncatedRows = false
+        var truncatedColumns = false
+        val maxTableRows = 5_000
+        val maxTableColumns = 256
+
         var event = parser.eventType
         while (event != XmlPullParser.END_DOCUMENT) {
             when (event) {
                 XmlPullParser.START_TAG -> when (parser.name) {
-                    "p" -> { inParagraph = true; paragraph = StringBuilder(); style = "" }
-                    "pStyle" -> style = parser.getAttributeValue("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "val") ?: parser.getAttributeValue(null, "val") ?: ""
+                    "tbl" -> {
+                        inTable = true
+                        tableRows = mutableListOf()
+                        truncatedRows = false
+                        truncatedColumns = false
+                    }
+                    "tr" -> if (inTable) {
+                        inRow = true
+                        row = mutableListOf()
+                    }
+                    "tc" -> if (inTable && inRow) {
+                        inCell = true
+                        cell = StringBuilder()
+                    }
+                    "p" -> {
+                        inParagraph = true
+                        paragraph = StringBuilder()
+                        style = ""
+                    }
+                    "pStyle" -> style =
+                        parser.getAttributeValue("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "val")
+                            ?: parser.getAttributeValue(null, "val")
+                            ?: ""
                     "t" -> inText = true
                     "tab" -> if (inParagraph) paragraph.append("    ")
                     "br", "cr" -> if (inParagraph) paragraph.append('\n')
                 }
+
                 XmlPullParser.TEXT -> if (inParagraph && inText) paragraph.append(parser.text)
+
                 XmlPullParser.END_TAG -> when (parser.name) {
                     "t" -> inText = false
                     "p" -> {
                         val value = paragraph.toString().trim()
                         if (value.isNotEmpty()) {
-                            val heading = Regex("(?i)^heading([1-6])$").matchEntire(style)
-                            if (heading != null) result.append("#".repeat(heading.groupValues[1].toInt())).append(' ').append(value).append("\n\n")
-                            else result.append(value).append("\n\n")
+                            if (inTable && inCell) {
+                                if (cell.isNotEmpty()) cell.append(' ')
+                                cell.append(value)
+                            } else {
+                                val heading = Regex("(?i)^heading([1-6])$").matchEntire(style)
+                                if (heading != null) {
+                                    result.append("#".repeat(heading.groupValues[1].toInt()))
+                                        .append(' ').append(value).append("\n\n")
+                                } else {
+                                    result.append(value).append("\n\n")
+                                }
+                            }
                         }
                         inParagraph = false
+                    }
+                    "tc" -> if (inTable && inCell) {
+                        if (row.size < maxTableColumns) row.add(cell.toString().trim())
+                        else truncatedColumns = true
+                        inCell = false
+                    }
+                    "tr" -> if (inTable && inRow) {
+                        if (row.isNotEmpty()) {
+                            if (tableRows.size < maxTableRows) tableRows.add(row.toList())
+                            else truncatedRows = true
+                        }
+                        inRow = false
+                    }
+                    "tbl" -> if (inTable) {
+                        if (tableRows.isNotEmpty()) {
+                            result.append(MarkdownTableRenderer.render(tableRows)).append("\n\n")
+                        }
+                        if (truncatedRows) {
+                            warnings.add("DOCX: baris tabel setelah 5.000 baris pada sebuah tabel tidak ditampilkan.")
+                        }
+                        if (truncatedColumns) {
+                            warnings.add("DOCX: kolom tabel setelah kolom ke-256 tidak ditampilkan.")
+                        }
+                        inTable = false
                     }
                 }
             }
             event = parser.next()
         }
-        warnings.add("DOCX: teks paragraf dan heading dasar diekstrak; tabel, gambar, catatan kaki, header/footer, dan tata letak belum dipertahankan.")
+
+        warnings.add(
+            "DOCX: paragraf, heading, dan tabel sederhana diekstrak. Gambar, catatan kaki, header/footer, format teks, dan tata letak halaman belum dipertahankan."
+        )
         return result.toString().trim()
     }
+
+
 }

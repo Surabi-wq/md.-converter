@@ -1,6 +1,7 @@
 package id.surabi.mdconverter
 
 import android.text.Html
+import android.net.Uri
 import android.util.Xml
 import org.json.JSONArray
 import org.json.JSONObject
@@ -17,6 +18,7 @@ internal object ArchiveDocumentReader {
     private const val MAX_ARCHIVE_UNCOMPRESSED_BYTES = 80L * 1024 * 1024
     private const val MAX_ARCHIVE_ENTRIES = 10_000
     private const val MAX_ROWS_PER_SHEET = 5000
+    private const val MAX_COLUMNS_PER_SHEET = 256
 
     fun convert(extension: String, bytes: ByteArray, warnings: MutableList<String>): String =
         when (extension) {
@@ -90,7 +92,8 @@ internal object ArchiveDocumentReader {
         require(sheets.isNotEmpty()) { "XLSX tidak memiliki lembar kerja yang dapat dibaca." }
         warnings.add("XLSX: nilai sel yang tersimpan diekstrak. Rumus tidak dihitung ulang dan format visual tidak dipertahankan.")
         return sheets.entries.mapIndexed { index, entry ->
-            "## Lembar " + (index + 1) + "\n\n" + renderTable(xlsxRows(entry.value, strings))
+            val label = "Lembar " + (index + 1)
+            "## " + label + "\n\n" + MarkdownTableRenderer.render(xlsxRows(entry.value, strings, warnings, label))
         }.joinToString("\n\n")
     }
 
@@ -121,9 +124,11 @@ internal object ArchiveDocumentReader {
         return result
     }
 
-    private fun xlsxRows(xml: String, shared: List<String>): List<List<String>> {
+    private fun xlsxRows(xml: String, shared: List<String>, warnings: MutableList<String>, sheetLabel: String): List<List<String>> {
         val parser = parser(xml)
         val rows = mutableListOf<List<String>>()
+        var truncatedRows = false
+        var truncatedColumns = false
         var row = sortedMapOf<Int, String>()
         var inCell = false
         var cellType = ""
@@ -148,7 +153,8 @@ internal object ArchiveDocumentReader {
                     "v", "t" -> capture = false
                     "c" -> {
                         val index = columnIndex(cellRef)
-                        if (index >= 0) {
+                        if (index >= MAX_COLUMNS_PER_SHEET) truncatedColumns = true
+                        if (index >= 0 && index < MAX_COLUMNS_PER_SHEET) {
                             val raw = cellValue.toString()
                             val value = when (cellType) {
                                 "s" -> shared.getOrNull(raw.toIntOrNull() ?: -1).orEmpty()
@@ -159,14 +165,18 @@ internal object ArchiveDocumentReader {
                         }
                         inCell = false
                     }
-                    "row" -> if (row.isNotEmpty() && rows.size < MAX_ROWS_PER_SHEET) {
-                        val width = row.lastKey() + 1
-                        rows.add((0 until width).map { row[it].orEmpty() })
+                    "row" -> if (row.isNotEmpty()) {
+                        if (rows.size < MAX_ROWS_PER_SHEET) {
+                            val width = minOf(row.lastKey() + 1, MAX_COLUMNS_PER_SHEET)
+                            rows.add((0 until width).map { row[it].orEmpty() })
+                        } else truncatedRows = true
                     }
                 }
             }
             event = parser.next()
         }
+        if (truncatedRows) warnings.add("XLSX: sebagian baris pada " + sheetLabel + " tidak ditampilkan karena batas 5.000 baris.")
+        if (truncatedColumns) warnings.add("XLSX: kolom setelah kolom ke-256 pada " + sheetLabel + " tidak ditampilkan demi membatasi memori.")
         return rows
     }
 
@@ -174,7 +184,10 @@ internal object ArchiveDocumentReader {
         val letters = reference.takeWhile { it.isLetter() }.uppercase()
         if (letters.isEmpty()) return -1
         var result = 0
-        letters.forEach { result = result * 26 + (it - 'A' + 1) }
+        letters.forEach {
+            result = result * 26 + (it - 'A' + 1)
+            if (result > MAX_COLUMNS_PER_SHEET) return MAX_COLUMNS_PER_SHEET
+        }
         return result - 1
     }
 
@@ -187,6 +200,8 @@ internal object ArchiveDocumentReader {
         var sheetName = "Lembar"
         var rows = mutableListOf<List<String>>()
         var row = mutableListOf<String>()
+        var truncatedRows = false
+        var truncatedColumns = false
         var cell = StringBuilder()
         var inCell = false
         var inParagraph = false
@@ -199,6 +214,8 @@ internal object ArchiveDocumentReader {
                         sheetName = attr(parser, "name", "urn:oasis:names:tc:opendocument:xmlns:table:1.0")
                             ?: "Lembar " + (sheets.size + 1)
                         rows = mutableListOf()
+                        truncatedRows = false
+                        truncatedColumns = false
                     }
                     "table-row" -> row = mutableListOf()
                     "table-cell", "covered-table-cell" -> {
@@ -212,17 +229,27 @@ internal object ArchiveDocumentReader {
                 XmlPullParser.END_TAG -> when (parser.name) {
                     "p" -> if (inCell) { cell.append(' '); inParagraph = false }
                     "table-cell", "covered-table-cell" -> {
-                        repeat(repeatColumns) { row.add(cell.toString().trim()) }
+                        repeat(repeatColumns) {
+                            if (row.size < MAX_COLUMNS_PER_SHEET) row.add(cell.toString().trim())
+                            else truncatedColumns = true
+                        }
                         inCell = false
                     }
-                    "table-row" -> if (row.isNotEmpty() && rows.size < MAX_ROWS_PER_SHEET) rows.add(row.toList())
-                    "table" -> if (rows.isNotEmpty()) sheets.add(sheetName to rows)
+                    "table-row" -> if (row.isNotEmpty()) {
+                        if (rows.size < MAX_ROWS_PER_SHEET) rows.add(row.toList())
+                        else truncatedRows = true
+                    }
+                    "table" -> if (rows.isNotEmpty()) {
+                        sheets.add(sheetName to rows)
+                        if (truncatedRows) warnings.add("ODS: sebagian baris pada '" + sheetName + "' tidak ditampilkan karena batas 5.000 baris.")
+                        if (truncatedColumns) warnings.add("ODS: kolom setelah kolom ke-256 pada '" + sheetName + "' tidak ditampilkan demi membatasi memori.")
+                    }
                 }
             }
             event = parser.next()
         }
         require(sheets.isNotEmpty()) { "ODS tidak memiliki tabel yang dapat dibaca." }
-        return sheets.map { (name, data) -> "## " + name + "\n\n" + renderTable(data) }.joinToString("\n\n")
+        return sheets.map { (name, data) -> "## " + name + "\n\n" + MarkdownTableRenderer.render(data) }.joinToString("\n\n")
     }
 
     private fun pptx(bytes: ByteArray, warnings: MutableList<String>): String {
@@ -276,16 +303,112 @@ internal object ArchiveDocumentReader {
     private fun epub(bytes: ByteArray, warnings: MutableList<String>): String {
         val entries = readEntries(bytes) {
             val lower = it.lowercase()
-            (lower.endsWith(".xhtml") || lower.endsWith(".html") || lower.endsWith(".htm")) &&
-                !lower.startsWith("meta-inf/") && !lower.contains("nav.xhtml") && !lower.contains("toc.xhtml")
+            lower == "meta-inf/container.xml" ||
+                lower.endsWith(".opf") ||
+                ((lower.endsWith(".xhtml") || lower.endsWith(".html") || lower.endsWith(".htm")) &&
+                    !lower.startsWith("meta-inf/") && !lower.contains("nav.xhtml") && !lower.contains("toc.xhtml"))
         }
-        require(entries.isNotEmpty()) { "EPUB tidak memiliki bab HTML/XHTML yang dapat dibaca." }
-        warnings.add("EPUB: bab teks diekstrak berdasarkan urutan nama file. Urutan bacaan berdasarkan spine EPUB dapat berbeda pada sebagian buku.")
-        return entries.entries.take(300).mapIndexed { index, entry ->
-            val title = entry.key.substringAfterLast('/').substringBeforeLast('.').replace('-', ' ').replace('_', ' ')
-            "## " + title.ifBlank { "Bab " + (index + 1) } + "\n\n" + htmlText(entry.value)
-        }.filter { it.substringAfter("\n\n").isNotBlank() }.joinToString("\n\n")
-            .ifBlank { error("Tidak ditemukan teks bab pada EPUB.") }
+        val chapterEntries = entries.filterKeys(::isEpubChapter)
+        require(chapterEntries.isNotEmpty()) { "EPUB tidak memiliki bab HTML/XHTML yang dapat dibaca." }
+
+        val spineOrder = epubSpineOrder(entries)
+        val orderedPaths = spineOrder
+            ?.filter { chapterEntries.containsKey(it) }
+            ?.distinct()
+            ?.takeIf { it.isNotEmpty() }
+            ?: run {
+                warnings.add("EPUB: manifest atau spine tidak dapat dibaca; bab diurutkan menurut urutan entri ZIP. Urutan ini dapat berbeda dari urutan bacaan buku.")
+                chapterEntries.keys.toList()
+            }
+
+        if (orderedPaths.size > 300) warnings.add("EPUB: hanya 300 bab pertama menurut urutan bacaan yang diekstrak.")
+        val output = orderedPaths.take(300).mapIndexedNotNull { index, path ->
+            val source = chapterEntries[path] ?: return@mapIndexedNotNull null
+            val title = path.substringAfterLast('/').substringBeforeLast('.').replace('-', ' ').replace('_', ' ')
+            val text = htmlText(source)
+            if (text.isBlank()) null
+            else "## " + title.ifBlank { "Bab " + (index + 1) } + "\n\n" + text
+        }.joinToString("\n\n")
+
+        if (spineOrder != null) {
+            warnings.add("EPUB: urutan bab mengikuti spine pada paket EPUB; tata letak, gambar tertanam, dan catatan kaki mungkin tidak dipertahankan.")
+        }
+        return output.ifBlank { error("Tidak ditemukan teks bab pada EPUB.") }
+    }
+
+    private fun isEpubChapter(path: String): Boolean {
+        val lower = path.lowercase()
+        return (lower.endsWith(".xhtml") || lower.endsWith(".html") || lower.endsWith(".htm")) &&
+            !lower.startsWith("meta-inf/") &&
+            !lower.substringAfterLast('/').startsWith("nav.") &&
+            !lower.substringAfterLast('/').startsWith("toc.")
+    }
+
+    private fun epubSpineOrder(entries: Map<String, String>): List<String>? {
+        val containerPath = entries.keys.firstOrNull { it.equals("META-INF/container.xml", ignoreCase = true) }
+            ?: return null
+        val containerParser = parser(entries[containerPath] ?: return null)
+        var packagePath: String? = null
+        var event = containerParser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            if (event == XmlPullParser.START_TAG && containerParser.name == "rootfile") {
+                packagePath = attr(containerParser, "full-path")
+                if (!packagePath.isNullOrBlank()) break
+            }
+            event = containerParser.next()
+        }
+        val resolvedPackagePath = packagePath?.let { resolveEpubPath("", it) } ?: return null
+        val opf = entries[resolvedPackagePath] ?: return null
+        val basePath = resolvedPackagePath.substringBeforeLast('/', "")
+        val manifest = linkedMapOf<String, Pair<String, String>>()
+        val spineRefs = mutableListOf<String>()
+        val opfParser = parser(opf)
+        event = opfParser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            if (event == XmlPullParser.START_TAG) {
+                when (opfParser.name) {
+                    "item" -> {
+                        val id = attr(opfParser, "id")
+                        val href = attr(opfParser, "href")
+                        val mediaType = attr(opfParser, "media-type").orEmpty()
+                        if (!id.isNullOrBlank() && !href.isNullOrBlank()) {
+                            manifest[id] = href to mediaType
+                        }
+                    }
+                    "itemref" -> {
+                        val idRef = attr(opfParser, "idref")
+                        if (!idRef.isNullOrBlank()) spineRefs.add(idRef)
+                    }
+                }
+            }
+            event = opfParser.next()
+        }
+
+        val ordered = spineRefs.mapNotNull { idRef ->
+            val (href, mediaType) = manifest[idRef] ?: return@mapNotNull null
+            if (mediaType.isNotBlank() && mediaType !in setOf("application/xhtml+xml", "text/html")) {
+                return@mapNotNull null
+            }
+            resolveEpubPath(basePath, href)?.takeIf(::isEpubChapter)
+        }
+        return ordered.takeIf { it.isNotEmpty() }
+    }
+
+    private fun resolveEpubPath(basePath: String, href: String): String? {
+        val cleanHref = Uri.decode(href.substringBefore('#').substringBefore('?'))
+            .replace('\\', '/')
+        if (cleanHref.isBlank()) return null
+        val combined = if (cleanHref.startsWith('/')) cleanHref.drop(1)
+            else listOf(basePath, cleanHref).filter { it.isNotBlank() }.joinToString("/")
+        val segments = mutableListOf<String>()
+        combined.split('/').forEach { segment ->
+            when (segment) {
+                "", "." -> Unit
+                ".." -> if (segments.isNotEmpty()) segments.removeAt(segments.lastIndex) else return null
+                else -> segments.add(segment)
+            }
+        }
+        return segments.joinToString("/").takeIf { it.isNotBlank() }
     }
 
     private fun notebook(bytes: ByteArray): String {
@@ -343,20 +466,6 @@ internal object ArchiveDocumentReader {
         return output.toString().replace(Regex("\\s+"), " ").trim()
     }
 
-    private fun renderTable(source: List<List<String>>): String {
-        require(source.isNotEmpty()) { "Lembar kerja kosong." }
-        val width = source.maxOf { it.size }.coerceAtLeast(1)
-        val rows = source.map { it.take(width) + List((width - it.size).coerceAtLeast(0)) { "" } }
-        fun render(row: List<String>) = "| " + row.joinToString(" | ") {
-            it.trim().replace("|", "\\|").replace("\r", "").replace("\n", "<br>")
-        } + " |"
-        return buildString {
-            appendLine(render(rows.first()))
-            appendLine("| " + List(width) { "---" }.joinToString(" | ") + " |")
-            rows.drop(1).forEach { appendLine(render(it)) }
-        }.trimEnd()
-    }
-
     private fun fenced(language: String, value: String): String {
         val longest = Regex("\u0060{3,}").findAll(value).maxOfOrNull { it.value.length } ?: 0
         val fence = "\u0060".repeat(maxOf(3, longest + 1))
@@ -366,6 +475,7 @@ internal object ArchiveDocumentReader {
     private fun parser(xml: String): XmlPullParser {
         val parser = Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
+        runCatching { parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) }
         parser.setInput(xml.reader())
         return parser
     }

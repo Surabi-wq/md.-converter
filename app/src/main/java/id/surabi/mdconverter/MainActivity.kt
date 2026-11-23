@@ -1,6 +1,7 @@
 package id.surabi.mdconverter
 
 import android.net.Uri
+import android.content.Intent
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -15,6 +16,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,6 +28,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
@@ -42,16 +48,84 @@ data class ConvertedFile(
     fun readMarkdown(): String =
         cacheFilePath?.let { java.io.File(it).readText(Charsets.UTF_8) } ?: markdown
 
+    fun writeMarkdownTo(writer: java.io.Writer) {
+        val path = cacheFilePath
+        if (path == null) writer.write(markdown)
+        else java.io.File(path).bufferedReader(Charsets.UTF_8).use { reader ->
+            val buffer = CharArray(16 * 1024)
+            while (true) {
+                val count = reader.read(buffer)
+                if (count < 0) break
+                writer.write(buffer, 0, count)
+            }
+        }
+    }
+
+    fun writeBodyTo(writer: java.io.Writer) {
+        val path = cacheFilePath
+        if (path == null) {
+            val body = markdown.substringAfter("\n\n", markdown).trim()
+            writer.write(body.ifBlank { "_Tidak ada konten teks yang dapat ditampilkan._" })
+            return
+        }
+
+        java.io.File(path).bufferedReader(Charsets.UTF_8).use { reader ->
+            reader.readLine() // Drop the source-title heading; merger supplies its own section heading.
+            var line: String?
+            do {
+                line = reader.readLine()
+            } while (line != null && line.isBlank())
+            var pendingBlankLines = 0
+            var wroteContent = false
+            while (line != null) {
+                if (line.isBlank()) {
+                    pendingBlankLines++
+                } else {
+                    repeat(pendingBlankLines) { writer.write("\n") }
+                    pendingBlankLines = 0
+                    writer.write(line)
+                    writer.write("\n")
+                    wroteContent = true
+                }
+                line = reader.readLine()
+            }
+            if (!wroteContent) writer.write("_Tidak ada konten teks yang dapat ditampilkan._")
+        }
+    }
+
     fun deleteCachedContent() {
         cacheFilePath?.let { java.io.File(it).delete() }
     }
 }
 
 class MainActivity : ComponentActivity() {
+    private var incomingSharedUris by mutableStateOf<List<Uri>>(emptyList())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        incomingSharedUris = extractSharedUris(intent)
         PDFBoxResourceLoader.init(applicationContext)
         setContent { Screen() }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        incomingSharedUris = extractSharedUris(intent)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun extractSharedUris(source: Intent?): List<Uri> {
+        if (source == null) return emptyList()
+        val fromExtra = when (source.action) {
+            Intent.ACTION_SEND -> listOfNotNull(source.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+            Intent.ACTION_SEND_MULTIPLE -> source.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+            else -> emptyList()
+        }
+        val fromClip = source.clipData?.let { clip ->
+            (0 until clip.itemCount).mapNotNull { index -> clip.getItemAt(index).uri }
+        }.orEmpty()
+        return (fromExtra + fromClip + listOfNotNull(source.data)).distinct()
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -59,18 +133,37 @@ class MainActivity : ComponentActivity() {
     private fun Screen() {
         val conversionViewModel: ConversionViewModel = viewModel()
         LaunchedEffect(conversionViewModel) {
-            conversionViewModel.cleanupOrphanedCacheFiles(cacheDir)
+            conversionViewModel.initialize(applicationContext)
         }
         val files = conversionViewModel.files
         val busy = conversionViewModel.busy
+        val historyReady = conversionViewModel.historyReady
         var message by remember { mutableStateOf(conversionViewModel.message) }
         LaunchedEffect(conversionViewModel.message) { message = conversionViewModel.message }
         var preview by remember { mutableStateOf<ConvertedFile?>(null) }
         var showHelp by remember { mutableStateOf(false) }
         var pendingMarkdown by remember { mutableStateOf<String?>(null) }
+        var pendingFile by remember { mutableStateOf<ConvertedFile?>(null) }
+        var pendingMergeFiles by remember { mutableStateOf<List<ConvertedFile>?>(null) }
         var pendingName by remember { mutableStateOf("hasil.md") }
         val selectedUris = conversionViewModel.selectedUris
         var outputFolder by remember { mutableStateOf(DocumentStorage.loadOutputFolder(this@MainActivity)) }
+        LaunchedEffect(incomingSharedUris) {
+            val shared = incomingSharedUris
+            if (shared.isNotEmpty()) {
+                val existing = selectedUris.map { it.toString() }.toHashSet()
+                val fresh = shared.filter { existing.add(it.toString()) }
+                fresh.forEach { uri ->
+                    runCatching {
+                        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                }
+                selectedUris.addAll(fresh)
+                message = if (fresh.isEmpty()) "File yang dibagikan sudah ada di antrean."
+                    else "${fresh.size} file diterima melalui Share Android."
+                incomingSharedUris = emptyList()
+            }
+        }
         val mergeScope = rememberCoroutineScope()
         val successfulCount = files.count { it.error == null }
 
@@ -78,36 +171,59 @@ class MainActivity : ComponentActivity() {
             if (uris.isNotEmpty() && !busy) {
                 val existing = selectedUris.map { it.toString() }.toHashSet()
                 val fresh = uris.filter { existing.add(it.toString()) }
+                fresh.forEach { uri ->
+                    runCatching {
+                        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                }
                 selectedUris.addAll(fresh)
                 message = if (fresh.isEmpty()) "File yang dipilih sudah ada di antrean." else "${fresh.size} file ditambahkan. Total ${selectedUris.size} file menunggu konfirmasi."
             }
         }
         val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
             if (tree != null) runCatching {
-                contentResolver.takePersistableUriPermission(tree, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                val previousFolder = outputFolder
+                val readWriteFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                contentResolver.takePersistableUriPermission(tree, readWriteFlags)
                 getSharedPreferences("settings", MODE_PRIVATE).edit().putString("output_tree", tree.toString()).apply()
                 outputFolder = tree
+                if (previousFolder != null && previousFolder != tree) {
+                    runCatching { contentResolver.releasePersistableUriPermission(previousFolder, readWriteFlags) }
+                }
                 message = "Folder keluaran tersimpan. Hasil berikutnya akan disimpan otomatis."
             }.onFailure { message = "Gagal menyimpan izin folder: ${it.message}" }
         }
         val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
             val markdown = pendingMarkdown
-            if (uri != null && markdown != null) {
+            val sourceFile = pendingFile
+            val mergeFiles = pendingMergeFiles
+            if (uri != null && (markdown != null || sourceFile != null || mergeFiles != null)) {
                 lifecycleScope.launch {
                     try {
                         withContext(Dispatchers.IO) {
-                            (contentResolver.openOutputStream(uri, "wt") ?: error("Lokasi penyimpanan tidak dapat dibuka."))
-                                .bufferedWriter(Charsets.UTF_8).use { it.write(markdown) }
+                            val output = contentResolver.openOutputStream(uri, "wt")
+                                ?: error("Lokasi penyimpanan tidak dapat dibuka.")
+                            output.bufferedWriter(Charsets.UTF_8).use { writer ->
+                                when {
+                                    sourceFile != null -> sourceFile.writeMarkdownTo(writer)
+                                    mergeFiles != null -> MarkdownMerger.writeTo(mergeFiles, writer)
+                                    markdown != null -> writer.write(markdown)
+                                }
+                            }
                         }
                         message = "Markdown berhasil disimpan."
                     } catch (e: Exception) {
                         message = "Gagal menyimpan: ${e.message ?: "kesalahan tidak diketahui"}"
                     } finally {
                         pendingMarkdown = null
+                        pendingFile = null
+                        pendingMergeFiles = null
                     }
                 }
             } else {
                 pendingMarkdown = null
+                pendingFile = null
+                pendingMergeFiles = null
             }
         }
 
@@ -131,7 +247,7 @@ class MainActivity : ComponentActivity() {
                         },
                         actions = {
                             IconButton(onClick = { showHelp = true }) {
-                                Icon(Icons.Default.HelpOutline, contentDescription = "Panduan penggunaan Marka")
+                                Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "Panduan penggunaan Marka")
                             }
                         }
                     )
@@ -161,22 +277,38 @@ class MainActivity : ComponentActivity() {
                                     "Ubah file jadi Markdown. Konversi dokumen dan media langsung di perangkat, lalu tinjau atau gabungkan hasilnya dalam satu dokumen terstruktur.",
                                     color = Color(0xFF49635D)
                                 )
-                                Button(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+                                Button(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !busy && historyReady, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
                                     Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp)); Text("1. Pilih file")
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("${selectedUris.size} file menunggu konfirmasi", fontSize = 12.sp, color = Color.Gray, modifier = Modifier.weight(1f))
-                                    if (selectedUris.isNotEmpty()) TextButton(onClick = { selectedUris.clear(); message = "Antrean pilihan dikosongkan." }, enabled = !busy) { Text("Kosongkan") }
+                                    if (selectedUris.isNotEmpty()) TextButton(onClick = {
+                                        selectedUris.toList().forEach { DocumentStorage.releaseReadPermission(this@MainActivity, it) }
+                                        selectedUris.clear()
+                                        message = "Antrean pilihan dikosongkan."
+                                    }, enabled = !busy) { Text("Kosongkan") }
                                 }
                                 if (selectedUris.isNotEmpty()) {
                                     Text("File terpilih (${selectedUris.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF315F55))
                                     selectedUris.take(4).forEach { uri ->
+                                        val displayName = remember(uri) {
+                                            mutableStateOf("Memuat nama file…")
+                                        }
+                                        LaunchedEffect(uri) {
+                                            displayName.value = withContext(Dispatchers.IO) {
+                                                runCatching { DocumentStorage.queryName(this@MainActivity, uri) }
+                                                    .getOrDefault("File terpilih")
+                                            }
+                                        }
                                         Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFFF1F5F2)) {
                                             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(Icons.Default.InsertDriveFile, null, tint = Color(0xFF315F55), modifier = Modifier.size(20.dp))
+                                                Icon(Icons.AutoMirrored.Filled.InsertDriveFile, null, tint = Color(0xFF315F55), modifier = Modifier.size(20.dp))
                                                 Spacer(Modifier.width(8.dp))
-                                                Text(DocumentStorage.queryName(this@MainActivity, uri).take(48), fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                                                IconButton(onClick = { selectedUris.remove(uri) }, enabled = !busy) {
+                                                Text(displayName.value.take(48), fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                                IconButton(onClick = {
+                                                    selectedUris.remove(uri)
+                                                    DocumentStorage.releaseReadPermission(this@MainActivity, uri)
+                                                }, enabled = !busy) {
                                                     Icon(Icons.Default.Close, "Hapus dari antrean", tint = Color.Gray, modifier = Modifier.size(18.dp))
                                                 }
                                             }
@@ -188,7 +320,7 @@ class MainActivity : ComponentActivity() {
                                     val batch = selectedUris.toList()
                                     selectedUris.clear()
                                     conversionViewModel.start(applicationContext, batch, outputFolder)
-                                }, enabled = !busy && selectedUris.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+                                }, enabled = !busy && historyReady && selectedUris.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
                                     Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("2. Konfirmasi & mulai konversi")
                                 }
                                 OutlinedButton(onClick = { folderPicker.launch(outputFolder) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
@@ -225,7 +357,7 @@ class MainActivity : ComponentActivity() {
                                 AssistChip(onClick = {}, label = { Text("${files.count { it.error != null }} gagal") }, enabled = false)
                             }
                             if (files.isNotEmpty()) {
-                                TextButton(onClick = { conversionViewModel.clearResults() }, enabled = !busy) {
+                                TextButton(onClick = { conversionViewModel.clearResults(this@MainActivity) }, enabled = !busy && historyReady) {
                                     Text("Hapus hasil")
                                 }
                             }
@@ -256,14 +388,15 @@ class MainActivity : ComponentActivity() {
                                         val folder = outputFolder
                                         mergeScope.launch {
                                             try {
-                                                val markdown = withContext(Dispatchers.IO) { combineMarkdown(successful) }
                                                 if (folder == null) {
-                                                    pendingMarkdown = markdown
+                                                    pendingMarkdown = null
+                                                    pendingFile = null
+                                                    pendingMergeFiles = successful
                                                     pendingName = documentName
                                                     saver.launch(documentName)
                                                 } else {
                                                     val savedName = withContext(Dispatchers.IO) {
-                                                        DocumentStorage.saveToFolder(this@MainActivity, folder, documentName, markdown)
+                                                        DocumentStorage.saveMergedToFolder(this@MainActivity, folder, documentName, successful)
                                                     }
                                                     message = "Dokumen gabungan berhasil disimpan sebagai " + savedName
                                                 }
@@ -275,7 +408,7 @@ class MainActivity : ComponentActivity() {
                                     enabled = !busy && successfulCount >= 2,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Icon(Icons.Default.MergeType, null)
+                                    Icon(Icons.AutoMirrored.Filled.MergeType, null)
                                     Spacer(Modifier.width(8.dp))
                                     Text("3. Gabungkan & simpan satu file .md")
                                 }
@@ -284,6 +417,9 @@ class MainActivity : ComponentActivity() {
                                         val successful = files.filter { it.error == null }
                                         mergeScope.launch {
                                             try {
+                                                require(MarkdownMerger.estimatedSourceBytes(successful) <= 8L * 1024 * 1024) {
+                                                    "Isi gabungan terlalu besar untuk pratinjau dalam memori. Gunakan tombol Gabungkan & simpan agar hasil ditulis langsung ke penyimpanan."
+                                                }
                                                 val markdown = withContext(Dispatchers.IO) { combineMarkdown(successful) }
                                                 preview = ConvertedFile(
                                                     -1L,
@@ -332,7 +468,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.InsertDriveFile, null, tint = Color(0xFF315F55))
+                                    Icon(Icons.AutoMirrored.Filled.InsertDriveFile, null, tint = Color(0xFF315F55))
                                     Spacer(Modifier.width(9.dp))
                                     Column(Modifier.weight(1f)) {
                                         Text(file.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
@@ -346,7 +482,9 @@ class MainActivity : ComponentActivity() {
                                         onClick = {
                                             mergeScope.launch {
                                                 try {
-                                                    pendingMarkdown = withContext(Dispatchers.IO) { file.readMarkdown() }
+                                                    pendingMarkdown = null
+                                                    pendingMergeFiles = null
+                                                    pendingFile = file
                                                     pendingName = MarkdownFileNames.fromSource(file.name)
                                                     saver.launch(pendingName)
                                                 } catch (error: Exception) {
@@ -364,6 +502,11 @@ class MainActivity : ComponentActivity() {
                                         onClick = {
                                             mergeScope.launch {
                                                 try {
+                                                    val sourceBytes = file.cacheFilePath?.let { java.io.File(it).length() }
+                                                        ?: file.markdown.toByteArray(Charsets.UTF_8).size.toLong()
+                                                    require(sourceBytes <= 4L * 1024 * 1024) {
+                                                        "File terlalu besar untuk pratinjau dalam memori. Gunakan tombol Simpan untuk mengekspor hasil secara langsung."
+                                                    }
                                                     val markdown = withContext(Dispatchers.IO) { file.readMarkdown() }
                                                     preview = file.copy(markdown = markdown, cacheFilePath = null)
                                                 } catch (error: Exception) {
@@ -382,7 +525,7 @@ class MainActivity : ComponentActivity() {
                         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                                 Text("Status", fontWeight = FontWeight.Bold)
-                                Text(message, color = Color.Gray, fontSize = 13.sp)
+                                Text(if (historyReady) message else "Memulihkan riwayat konversi…", color = Color.Gray, fontSize = 13.sp)
                                 if (busy) {
                                     LinearProgressIndicator(
                                         progress = { conversionViewModel.progress },
@@ -421,7 +564,7 @@ class MainActivity : ComponentActivity() {
                     onDismissRequest = { showHelp = false },
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Default.HelpOutline, contentDescription = null, tint = Color(0xFF315F55))
+                            Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null, tint = Color(0xFF315F55))
                             Text("Panduan penggunaan Marka")
                         }
                     },
@@ -457,25 +600,67 @@ class MainActivity : ComponentActivity() {
             }
 
             preview?.let { item ->
-                AlertDialog(
+                Dialog(
                     onDismissRequest = { preview = null },
-                    title = { Text(if (item.id == -1L) "Preview Markdown Gabungan" else "Preview Markdown") },
-                    text = {
-                        Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                            Text(item.name, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.height(8.dp))
-                            Text(item.markdown, fontSize = 12.sp)
+                    properties = DialogProperties(usePlatformDefaultWidth = false)
+                ) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize().padding(8.dp),
+                        shape = RoundedCornerShape(18.dp),
+                        color = Color(0xFFF4F7F5)
+                    ) {
+                        Column(Modifier.fillMaxSize()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        if (item.id == -1L) "Pratinjau dokumen gabungan" else "Pratinjau hasil konversi",
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF203D36)
+                                    )
+                                    Text(
+                                        item.name + " • " + item.format.uppercase(),
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF64756D),
+                                        maxLines = 1
+                                    )
+                                }
+                                IconButton(onClick = { preview = null }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Tutup pratinjau")
+                                }
+                            }
+                            HorizontalDivider(color = Color(0xFFDCE5DF))
+                            MarkdownPreview(
+                                markdown = item.markdown,
+                                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                                documentName = item.name,
+                                sourceFormat = item.format,
+                                warnings = item.warnings
+                            )
+                            HorizontalDivider(color = Color(0xFFDCE5DF))
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(onClick = { preview = null }) {
+                                    Text("Tutup")
+                                }
+                                Button(onClick = {
+                                    pendingMarkdown = item.markdown
+                                    pendingFile = null
+                                    pendingMergeFiles = null
+                                    pendingName = MarkdownFileNames.fromSource(item.name)
+                                    saver.launch(pendingName)
+                                }) {
+                                    Text("Ekspor .md")
+                                }
+                            }
                         }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            pendingMarkdown = item.markdown
-                            pendingName = MarkdownFileNames.fromSource(item.name)
-                            saver.launch(pendingName)
-                        }) { Text("Ekspor .md") }
-                    },
-                    dismissButton = { TextButton(onClick = { preview = null }) { Text("Tutup") } }
-                )
+                    }
+                }
             }
         }
     }

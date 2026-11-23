@@ -29,7 +29,7 @@ internal object SupportedFormats {
         FormatGroup(
             "Dokumen dan e-book",
             listOf("pdf", "docx", "odt", "xlsx", "pptx", "ods", "odp", "epub", "ipynb"),
-            "PDF berbasis teks dan PDF scan (OCR lokal maksimal 50 halaman), DOCX/ODT, spreadsheet, presentasi, EPUB, dan notebook diekstrak sesuai struktur yang dapat dibaca. Tata letak kompleks, rumus yang belum dihitung, dan media tertanam tidak selalu dipertahankan."
+            "PDF teks dan PDF campuran dapat diproses per halaman; OCR lokal dibatasi hingga 50 halaman yang memerlukan OCR. DOCX/ODT, spreadsheet, presentasi, EPUB, dan notebook diekstrak sesuai struktur yang dapat dibaca. Tata letak kompleks, rumus yang belum dihitung, dan media tertanam tidak selalu dipertahankan."
         ),
         FormatGroup(
             "Teks, data, dan subtitle",
