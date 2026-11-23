@@ -301,7 +301,7 @@ internal fun MarkdownPreview(
                                     }
                                     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                                         Text(
-                                            inlineMarkdown(block.text),
+                                            inlineMarkdown(block.text, searchQuery.value),
                                             fontSize = headingSize,
                                             lineHeight = (headingSize.value * 1.25f).sp,
                                             fontWeight = FontWeight.Bold,
@@ -318,7 +318,7 @@ internal fun MarkdownPreview(
 
                                 is MarkdownBlock.Paragraph -> {
                                     Text(
-                                        inlineMarkdown(block.text),
+                                        inlineMarkdown(block.text, searchQuery.value),
                                         color = PaperInk,
                                         fontSize = 13.sp,
                                         lineHeight = 21.sp,
@@ -337,7 +337,7 @@ internal fun MarkdownPreview(
                                                     fontWeight = FontWeight.Bold
                                                 )
                                                 Text(
-                                                    inlineMarkdown(item),
+                                                    inlineMarkdown(item, searchQuery.value),
                                                     color = PaperInk,
                                                     fontSize = 13.sp,
                                                     lineHeight = 19.sp
@@ -359,7 +359,7 @@ internal fun MarkdownPreview(
                                                     fontWeight = FontWeight.SemiBold
                                                 )
                                                 Text(
-                                                    inlineMarkdown(item),
+                                                    inlineMarkdown(item, searchQuery.value),
                                                     color = PaperInk,
                                                     fontSize = 13.sp,
                                                     lineHeight = 19.sp
@@ -418,7 +418,7 @@ internal fun MarkdownPreview(
                                                 shape = RoundedCornerShape(3.dp)
                                             ) {}
                                             Text(
-                                                inlineMarkdown(block.text),
+                                                inlineMarkdown(block.text, searchQuery.value),
                                                 modifier = Modifier.padding(start = 10.dp),
                                                 fontSize = 12.sp,
                                                 lineHeight = 19.sp,
@@ -450,7 +450,7 @@ internal fun MarkdownPreview(
                                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                                         row.forEach { cell ->
                                                             Text(
-                                                                inlineMarkdown(cell),
+                                                                inlineMarkdown(cell, searchQuery.value),
                                                                 modifier = Modifier
                                                                     .widthIn(min = 104.dp)
                                                                     .padding(horizontal = 10.dp, vertical = 8.dp),
@@ -491,22 +491,50 @@ internal fun MarkdownPreview(
     }
 }
 
-private fun inlineMarkdown(value: String) = buildAnnotatedString {
+private fun inlineMarkdown(value: String, searchQuery: String = "") = buildAnnotatedString {
+    fun appendHighlighted(text: String) {
+        val query = searchQuery.trim()
+        if (query.isEmpty()) {
+            append(text)
+            return
+        }
+        var cursor = 0
+        while (cursor < text.length) {
+            val matchStart = text.indexOf(query, cursor, ignoreCase = true)
+            if (matchStart < 0) {
+                append(text.substring(cursor))
+                break
+            }
+            if (matchStart > cursor) append(text.substring(cursor, matchStart))
+            val matchEnd = matchStart + query.length
+            pushStyle(
+                SpanStyle(
+                    background = Color(0xFFFFE39A),
+                    color = Color(0xFF26332E),
+                    fontWeight = FontWeight.Bold
+                )
+            )
+            append(text.substring(matchStart, matchEnd))
+            pop()
+            cursor = matchEnd
+        }
+    }
+
     val codeDelimiter = 96.toChar()
     val pattern = Regex(
-        "(!?\\[[^]]+\\]\\([^)]+\\)|" +
+        "(!?\\\\[[^]]+\\\\]\\\\([^)]+\\\\)|" +
             codeDelimiter + "[^" + codeDelimiter + "]+" + codeDelimiter +
-            "|\\*\\*[^*]+\\*\\*|~~[^~]+~~|\\*[^*]+\\*)"
+            "|\\\\*\\\\*[^*]+\\\\*\\\\*|~~[^~]+~~|\\\\*[^*]+\\\\*)"
     )
     var cursor = 0
     pattern.findAll(value).forEach { match ->
-        append(value.substring(cursor, match.range.first))
+        appendHighlighted(value.substring(cursor, match.range.first))
         val token = match.value
         when {
             token.startsWith("![") -> {
                 val label = token.substring(2).substringBefore("]")
                 pushStyle(SpanStyle(color = Color(0xFF537D6E), fontWeight = FontWeight.Medium))
-                append("▧ " + label)
+                appendHighlighted("▧ " + label)
                 pop()
             }
             token.firstOrNull() == codeDelimiter -> {
@@ -517,35 +545,35 @@ private fun inlineMarkdown(value: String) = buildAnnotatedString {
                         fontFamily = FontFamily.Monospace
                     )
                 )
-                append(token.substring(1, token.length - 1))
+                appendHighlighted(token.substring(1, token.length - 1))
                 pop()
             }
             token.startsWith("**") && token.endsWith("**") -> {
                 pushStyle(SpanStyle(fontWeight = FontWeight.Bold, color = Color(0xFF203F37)))
-                append(token.substring(2, token.length - 2))
+                appendHighlighted(token.substring(2, token.length - 2))
                 pop()
             }
             token.startsWith("~~") && token.endsWith("~~") -> {
                 pushStyle(SpanStyle(textDecoration = TextDecoration.LineThrough))
-                append(token.substring(2, token.length - 2))
+                appendHighlighted(token.substring(2, token.length - 2))
                 pop()
             }
             token.startsWith("*") && token.endsWith("*") -> {
                 pushStyle(SpanStyle(fontStyle = FontStyle.Italic))
-                append(token.substring(1, token.length - 1))
+                appendHighlighted(token.substring(1, token.length - 1))
                 pop()
             }
             token.startsWith("[") -> {
                 val label = token.substringAfter("[").substringBefore("]")
                 pushStyle(SpanStyle(color = PaperGreen, textDecoration = TextDecoration.Underline))
-                append(label)
+                appendHighlighted(label)
                 pop()
             }
-            else -> append(token)
+            else -> appendHighlighted(token)
         }
         cursor = match.range.last + 1
     }
-    if (cursor < value.length) append(value.substring(cursor))
+    if (cursor < value.length) appendHighlighted(value.substring(cursor))
 }
 
 
