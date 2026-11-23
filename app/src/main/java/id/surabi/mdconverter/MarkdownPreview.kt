@@ -21,7 +21,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,13 +56,13 @@ internal fun MarkdownPreview(
     val insights = remember(markdown, blocks) { MarkdownDocumentInsightsCalculator.calculate(blocks) }
     val scrollState = rememberScrollState()
     val headingPositions = remember(markdown) { mutableStateMapOf<Int, Int>() }
-    val viewportTop = remember(markdown) { mutableStateMapOf("value" to 0) }
+    val viewportTop = remember(markdown) { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
-    val searchExpanded = remember(markdown) { mutableStateMapOf("value" to false) }
-    val searchQuery = remember(markdown) { mutableStateMapOf("value" to "") }
-    val selectedSearchMatch = remember(markdown) { mutableStateMapOf("value" to 0) }
-    val searchMatches = remember(markdown, searchQuery["value"], blocks) {
-        val query = searchQuery["value"].orEmpty().trim()
+    val searchExpanded = remember(markdown) { mutableStateOf(false) }
+    val searchQuery = remember(markdown) { mutableStateOf("") }
+    val selectedSearchMatch = remember(markdown) { mutableStateOf(0) }
+    val searchMatches = remember(markdown, searchQuery.value, blocks) {
+        val query = searchQuery.value.orEmpty().trim()
         if (query.isBlank()) emptyList()
         else blocks.mapIndexedNotNull { index, block ->
             index.takeIf { block.searchableText().contains(query, ignoreCase = true) }
@@ -78,7 +78,7 @@ internal fun MarkdownPreview(
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(scrollState)
-                .onGloballyPositioned { viewportTop["value"] = it.positionInRoot().y.toInt() }
+                .onGloballyPositioned { viewportTop.value = it.positionInRoot().y.toInt() }
                 .padding(horizontal = 12.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -155,11 +155,11 @@ internal fun MarkdownPreview(
                     HorizontalDivider(color = PaperLine, thickness = 1.dp)
 
                     Row(
-                        modifier = Modifier.fillMaxWidth().clickable { searchExpanded["value"] = !searchExpanded.getValue("value") },
+                        modifier = Modifier.fillMaxWidth().clickable { searchExpanded.value = !searchExpanded.value },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            if (searchExpanded.getValue("value")) "TUTUP PENCARIAN" else "CARI DI DOKUMEN",
+                            if (searchExpanded.value) "TUTUP PENCARIAN" else "CARI DI DOKUMEN",
                             color = PaperGreen,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
@@ -167,29 +167,29 @@ internal fun MarkdownPreview(
                         )
                         Spacer(Modifier.weight(1f))
                         Text(
-                            if (searchExpanded.getValue("value")) "−" else "⌕",
+                            if (searchExpanded.value) "−" else "⌕",
                             color = PaperGreen,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    if (searchExpanded.getValue("value")) {
+                    if (searchExpanded.value) {
                         OutlinedTextField(
-                            value = searchQuery.getValue("value"),
+                            value = searchQuery.value,
                             onValueChange = {
-                                searchQuery["value"] = it
-                                selectedSearchMatch["value"] = 0
+                                searchQuery.value = it
+                                selectedSearchMatch.value = 0
                             },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             label = { Text("Cari kata atau frasa") },
                             placeholder = { Text("Contoh: kesimpulan, total, tanggal") }
                         )
-                        if (searchQuery.getValue("value").isNotBlank()) {
+                        if (searchQuery.value.isNotBlank()) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     if (searchMatches.isEmpty()) "Tidak ditemukan"
-                                    else "Hasil ${selectedSearchMatch.getValue("value") + 1} dari ${searchMatches.size}",
+                                    else "Hasil ${selectedSearchMatch.value + 1} dari ${searchMatches.size}",
                                     color = PaperMuted,
                                     fontSize = 10.sp
                                 )
@@ -198,8 +198,8 @@ internal fun MarkdownPreview(
                                     "‹ Sebelumnya",
                                     modifier = Modifier.clickable {
                                         if (searchMatches.isNotEmpty()) {
-                                            val next = (selectedSearchMatch.getValue("value") - 1 + searchMatches.size) % searchMatches.size
-                                            selectedSearchMatch["value"] = next
+                                            val next = (selectedSearchMatch.value - 1 + searchMatches.size) % searchMatches.size
+                                            selectedSearchMatch.value = next
                                             headingPositions[searchMatches[next]]?.let { target ->
                                                 scope.launch { scrollState.animateScrollTo(target.coerceAtLeast(0)) }
                                             }
@@ -212,8 +212,8 @@ internal fun MarkdownPreview(
                                     "Berikutnya ›",
                                     modifier = Modifier.clickable {
                                         if (searchMatches.isNotEmpty()) {
-                                            val next = (selectedSearchMatch.getValue("value") + 1) % searchMatches.size
-                                            selectedSearchMatch["value"] = next
+                                            val next = (selectedSearchMatch.value + 1) % searchMatches.size
+                                            selectedSearchMatch.value = next
                                             headingPositions[searchMatches[next]]?.let { target ->
                                                 scope.launch { scrollState.animateScrollTo(target.coerceAtLeast(0)) }
                                             }
@@ -286,7 +286,7 @@ internal fun MarkdownPreview(
                             Column(
                                 modifier = Modifier.fillMaxWidth().onGloballyPositioned { coordinates ->
                                     headingPositions[blockIndex] = (
-                                        scrollState.value + coordinates.positionInRoot().y.toInt() - viewportTop.getValue("value")
+                                        scrollState.value + coordinates.positionInRoot().y.toInt() - viewportTop.value
                                     ).coerceAtLeast(0)
                                 }
                             ) {
